@@ -1,0 +1,13 @@
+{
+  "name": "dtviewer",
+  "private": true,
+  "scripts": {
+    "bundle": "bun run scripts/bundle.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
