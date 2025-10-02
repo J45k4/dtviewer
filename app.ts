@@ -1,5 +1,5 @@
 import { dtsPare } from "./dts";
-import type { DtsNode, DtsValue } from "./dts";
+import type { DtsNode, DtsProperty, DtsValue } from "./dts";
 
 type LayoutNode = {
 	node: DtsNode;
@@ -26,6 +26,9 @@ const searchForm = document.querySelector<HTMLFormElement>("#search-form");
 const searchInput = document.querySelector<HTMLInputElement>("#search-input");
 const searchClear = document.querySelector<HTMLButtonElement>("#search-clear");
 const searchSummary = document.querySelector<HTMLParagraphElement>("#search-summary");
+const warningsToggle = document.querySelector<HTMLInputElement>("#warnings-checkbox");
+const warningsToggleLabel = document.querySelector<HTMLLabelElement>("#warnings-toggle-label");
+const warningsPanel = document.querySelector<HTMLPreElement>("#warnings-panel");
 
 const ctx = canvas?.getContext("2d");
 
@@ -85,10 +88,27 @@ type LayoutResult = {
 let currentLayout: LayoutResult | null = null;
 let currentRoot: DtsNode | null = null;
 let selectedNodePath: string | null = null;
+let selectedNode: DtsNode | null = null;
 let activeFilterRaw = "";
 let activeFilterNormalized = "";
 let filteredLayout: LayoutResult | null = null;
 let filteredNodes: LayoutNode[] = [];
+let currentWarnings: string[] = [];
+let lastStatus: {
+	origin: string;
+	nodeCount: number;
+	errors: string[];
+	warnings: string[];
+} | null = null;
+const nodeByPath = new Map<string, DtsNode>();
+const nodeByLabel = new Map<string, DtsNode>();
+const nodeByPhandle = new Map<number, DtsNode>();
+const HANDLE_PROPERTY_NAMES = new Set([
+	"phandle",
+	"linux,phandle",
+	"remote-endpoint",
+	"remote-endpoints",
+]);
 
 const truncate = (value: string, max = 32): string => {
 	if (value.length <= max) {
@@ -99,6 +119,51 @@ const truncate = (value: string, max = 32): string => {
 
 const countNodes = (node: DtsNode): number =>
 	1 + node.children.reduce((sum, child) => sum + countNodes(child), 0);
+
+const collectNumbersFromValue = (value: DtsValue): number[] => {
+	const collected: number[] = [];
+	const visit = (candidate: unknown) => {
+		if (Array.isArray(candidate)) {
+			candidate.forEach(visit);
+			return;
+		}
+		if (typeof candidate === "number" && Number.isFinite(candidate)) {
+			collected.push(candidate);
+		}
+	};
+
+	visit(value as unknown);
+	return collected;
+};
+
+const rebuildNodeIndexes = (root: DtsNode | null) => {
+	nodeByPath.clear();
+	nodeByLabel.clear();
+	nodeByPhandle.clear();
+
+	if (!root) {
+		return;
+	}
+
+	const visit = (node: DtsNode) => {
+		nodeByPath.set(node.path, node);
+		if (node.label) {
+			nodeByLabel.set(node.label, node);
+		}
+
+		node.properties.forEach((property) => {
+			if (property.name === "phandle" || property.name === "linux,phandle") {
+				collectNumbersFromValue(property.value).forEach((handle) => {
+					nodeByPhandle.set(handle, node);
+				});
+			}
+		});
+
+		node.children.forEach(visit);
+	};
+
+	visit(root);
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	Boolean(value) && typeof value === "object";
@@ -148,6 +213,94 @@ const appendMetaRow = (
 	const dd = document.createElement("dd");
 	dd.textContent = String(value);
 	container.append(dt, dd);
+};
+
+const formatHandleNumber = (value: number): string =>
+	value >= 10 ? `0x${value.toString(16)}` : String(value);
+
+const findLayoutNodeByPath = (path: string, layout: LayoutResult | null): LayoutNode | null => {
+	if (!layout) {
+		return null;
+	}
+	return layout.nodes.find((node) => node.node.path === path) ?? null;
+};
+
+const focusNodeByPath = (path: string) => {
+	const target = nodeByPath.get(path);
+	if (!target) {
+		return;
+	}
+
+	let layoutToUse = filteredLayout;
+	if (layoutToUse && !layoutToUse.nodes.some((node) => node.node.path === path)) {
+		clearSearch();
+		layoutToUse = currentLayout;
+	} else if (!layoutToUse) {
+		layoutToUse = currentLayout;
+	}
+
+	if (!layoutToUse) {
+		return;
+	}
+
+	let layoutNode = findLayoutNodeByPath(path, layoutToUse);
+	if (!layoutNode && layoutToUse !== currentLayout) {
+		layoutNode = findLayoutNodeByPath(path, currentLayout);
+	}
+	if (!layoutNode) {
+		return;
+	}
+
+	selectLayoutNode(layoutNode);
+};
+
+type PropertyLink = {
+	target: DtsNode;
+	display: string;
+};
+
+const resolvePropertyLinks = (property: DtsProperty): PropertyLink[] => {
+	const links: PropertyLink[] = [];
+	const seen = new Set<string>();
+	const nameLower = property.name.toLowerCase();
+	const allowNumeric = HANDLE_PROPERTY_NAMES.has(nameLower);
+
+	const addLink = (target: DtsNode, display: string) => {
+		const key = `${target.path}|${display}`;
+		if (seen.has(key)) {
+			return;
+		}
+		seen.add(key);
+		links.push({ target, display });
+	};
+
+	const inspect = (candidate: unknown) => {
+		if (Array.isArray(candidate)) {
+			candidate.forEach(inspect);
+			return;
+		}
+
+		if (candidate && typeof candidate === "object") {
+			if ("ref" in candidate && typeof (candidate as { ref?: unknown }).ref === "string") {
+				const label = String((candidate as { ref: string }).ref);
+				const target = nodeByLabel.get(label);
+				if (target) {
+					addLink(target, `&${label}`);
+				}
+			}
+			return;
+		}
+
+		if (allowNumeric && typeof candidate === "number" && Number.isFinite(candidate)) {
+			const target = nodeByPhandle.get(candidate);
+			if (target) {
+				addLink(target, formatHandleNumber(candidate));
+			}
+		}
+	};
+
+	inspect(property.value as unknown);
+	return links;
 };
 
 const renderDetails = (node: DtsNode | null) => {
@@ -203,12 +356,52 @@ const renderDetails = (node: DtsNode | null) => {
 		typeCell.textContent = property.type;
 		const valueCell = document.createElement("td");
 		valueCell.textContent = formatValue(property.value);
+		const links = resolvePropertyLinks(property).filter(
+			(link) => link.target.path !== node.path,
+		);
+		if (links.length) {
+			const linkList = document.createElement("div");
+			linkList.className = "property-links";
+			links.forEach((link) => {
+				const button = document.createElement("button");
+				button.type = "button";
+				button.className = "node-link";
+				button.textContent = `${link.display} → ${link.target.fullName}`;
+				button.title = `Jump to ${link.target.path}`;
+				button.addEventListener("click", () => {
+					focusNodeByPath(link.target.path);
+				});
+				linkList.append(button);
+			});
+			valueCell.append(linkList);
+		}
 		row.append(nameCell, typeCell, valueCell);
 		tbody.append(row);
 	});
 
 	table.append(tbody);
 	detailsContent.append(table);
+};
+
+const renderWarningsPanel = () => {
+	if (!warningsPanel || !warningsToggle || !warningsToggleLabel) {
+		return;
+	}
+
+	const hasWarnings = currentWarnings.length > 0;
+	warningsToggle.disabled = !hasWarnings;
+	warningsToggleLabel.classList.toggle("disabled", !hasWarnings);
+
+	if (!hasWarnings) {
+		warningsPanel.textContent = "";
+		warningsPanel.classList.add("hidden");
+		warningsToggle.checked = false;
+		return;
+	}
+
+	const lines = currentWarnings.map((warning) => `• ${warning}`);
+	warningsPanel.textContent = lines.join("\n");
+	warningsPanel.classList.toggle("hidden", !warningsToggle.checked);
 };
 
 const updateStatus = (
@@ -222,6 +415,8 @@ const updateStatus = (
 	}
 
 	statusElement.classList.remove("error", "warning");
+	currentWarnings = [...warnings];
+	renderWarningsPanel();
 
 	const lines: string[] = [
 		`${origin} – ${nodeCount} node${nodeCount === 1 ? "" : "s"}`,
@@ -229,8 +424,10 @@ const updateStatus = (
 
 	if (warnings.length) {
 		statusElement.classList.add("warning");
-		lines.push(`Warnings (x${warnings.length}):`);
-		lines.push(...warnings.map((w) => `• ${w}`));
+		const descriptor = warningsToggle?.checked
+			? `Warnings shown below (x${warnings.length})`
+			: `Warnings hidden (x${warnings.length})`;
+		lines.push(descriptor);
 	}
 
 	if (errors.length) {
@@ -240,6 +437,7 @@ const updateStatus = (
 	}
 
 	statusElement.textContent = lines.join("\n");
+	lastStatus = { origin, nodeCount, errors: [...errors], warnings: [...warnings] };
 };
 
 const layoutTree = (root: DtsNode): LayoutResult => {
@@ -382,6 +580,8 @@ const displayTree = (source: string, origin: string) => {
 		ctx.clearRect(0, 0, canvas.width, canvas.height);
 		currentLayout = null;
 		selectedNodePath = null;
+		selectedNode = null;
+		rebuildNodeIndexes(null);
 		renderDetails(null);
 		return;
 	}
@@ -389,8 +589,10 @@ const displayTree = (source: string, origin: string) => {
 	currentRoot = result.root;
 	currentLayout = layoutTree(result.root);
 	selectedNodePath = null;
+	selectedNode = null;
 	activeFilterRaw = "";
 	activeFilterNormalized = "";
+	rebuildNodeIndexes(currentRoot);
 	renderDetails(null);
 	if (canvas) {
 		canvas.style.cursor = "default";
@@ -415,11 +617,12 @@ const getLogicalPoint = (event: MouseEvent) => {
 };
 
 const pickNodeAt = (x: number, y: number): LayoutNode | null => {
-	if (!currentLayout) {
+	const layout = filteredLayout ?? currentLayout;
+	if (!layout) {
 		return null;
 	}
 	return (
-		currentLayout.nodes.find(
+		layout.nodes.find(
 			(node) =>
 				x >= node.x &&
 				x <= node.x + NODE_WIDTH &&
@@ -442,7 +645,8 @@ const pickNodeFromEvent = (event: MouseEvent): LayoutNode | null => {
 
 const selectLayoutNode = (layoutNode: LayoutNode) => {
 	selectedNodePath = layoutNode.node.path;
-	renderDetails(layoutNode.node);
+	selectedNode = nodeByPath.get(selectedNodePath) ?? layoutNode.node;
+	renderDetails(selectedNode);
 	const layoutToRender = filteredLayout ?? currentLayout;
 	if (layoutToRender) {
 		renderLayout(layoutToRender, selectedNodePath);
@@ -523,6 +727,70 @@ const applyFilter = (root: DtsNode | null, normalized: string): LayoutResult | n
 	return layoutTree(filteredRoot);
 };
 
+const applySearch = (query: string) => {
+	activeFilterRaw = query;
+	activeFilterNormalized = normalizeFilter(query);
+	filteredLayout = applyFilter(currentRoot, activeFilterNormalized);
+	filteredNodes = filteredLayout?.nodes ?? [];
+
+	if (activeFilterNormalized) {
+		const existingSelection =
+			selectedNodePath &&
+			filteredNodes.find((node) => node.node.path === selectedNodePath);
+
+		if (!existingSelection && filteredNodes.length > 0) {
+			const firstMatch =
+				filteredNodes.find((node) =>
+					nodeMatchesNormalized(node.node, activeFilterNormalized),
+				) ?? filteredNodes[0]!;
+			selectedNodePath = firstMatch.node.path;
+			selectedNode = nodeByPath.get(selectedNodePath) ?? firstMatch.node;
+			renderDetails(selectedNode);
+		}
+	} else if (selectedNodePath) {
+		const baseNode = currentLayout?.nodes.find(
+			(node) => node.node.path === selectedNodePath,
+		);
+		if (!baseNode) {
+			selectedNodePath = null;
+			selectedNode = null;
+			renderDetails(null);
+		} else {
+			selectedNode = nodeByPath.get(selectedNodePath) ?? baseNode.node;
+			renderDetails(selectedNode);
+		}
+	} else if (!selectedNode) {
+		renderDetails(null);
+	}
+
+	const layoutToRender = filteredLayout ?? currentLayout;
+	if (layoutToRender) {
+		renderLayout(layoutToRender, selectedNodePath);
+	}
+
+	updateSearchSummary(activeFilterRaw.trim(), filteredNodes.length);
+};
+
+const clearSearch = () => {
+	activeFilterRaw = "";
+	activeFilterNormalized = "";
+	filteredLayout = null;
+	filteredNodes = [];
+	if (searchInput) {
+		searchInput.value = "";
+	}
+	const layoutToRender = currentLayout;
+	if (layoutToRender) {
+		renderLayout(layoutToRender, selectedNodePath);
+	}
+	if (selectedNode) {
+		renderDetails(selectedNode);
+	} else {
+		renderDetails(null);
+	}
+	updateSearchSummary("", 0);
+};
+
 const handleFileSelection = async (file: File) => {
 	const contents = await file.text();
 	displayTree(contents, `File: ${file.name}`);
@@ -555,6 +823,18 @@ const attachEventHandlers = () => {
 		displayTree(SAMPLE_DTS, "Sample DTS");
 	});
 
+	warningsToggle?.addEventListener("change", () => {
+		renderWarningsPanel();
+		if (lastStatus) {
+			updateStatus(
+				lastStatus.origin,
+				lastStatus.nodeCount,
+				lastStatus.errors,
+				lastStatus.warnings,
+			);
+		}
+	});
+
 	if (canvas) {
 		canvas.addEventListener("click", (event) => {
 			const hit = pickNodeFromEvent(event);
@@ -578,61 +858,6 @@ const attachEventHandlers = () => {
 		});
 	}
 
-	const applySearch = (query: string) => {
-		activeFilterRaw = query;
-		activeFilterNormalized = normalizeFilter(query);
-		filteredLayout = applyFilter(currentRoot, activeFilterNormalized);
-		filteredNodes = filteredLayout?.nodes ?? [];
-
-		if (activeFilterNormalized) {
-			const existingSelection =
-				selectedNodePath &&
-				filteredNodes.find((node) => node.node.path === selectedNodePath);
-
-			if (!existingSelection && filteredNodes.length > 0) {
-				const firstMatch =
-					filteredNodes.find((node) =>
-						nodeMatchesNormalized(node.node, activeFilterNormalized),
-					) ?? filteredNodes[0]!;
-				selectedNodePath = firstMatch.node.path;
-				renderDetails(firstMatch.node);
-			} else if (!existingSelection && filteredNodes.length === 0) {
-				selectedNodePath = null;
-				renderDetails(null);
-			}
-		} else if (selectedNodePath) {
-			const baseNode = currentLayout?.nodes.find(
-				(node) => node.node.path === selectedNodePath,
-			);
-			if (!baseNode) {
-				selectedNodePath = null;
-				renderDetails(null);
-			}
-		} else {
-			renderDetails(null);
-		}
-
-		const layoutToRender = filteredLayout ?? currentLayout;
-		if (layoutToRender) {
-			renderLayout(layoutToRender, selectedNodePath);
-		}
-
-		updateSearchSummary(activeFilterRaw.trim(), filteredNodes.length);
-	};
-
-	const clearSearch = () => {
-		activeFilterRaw = "";
-		activeFilterNormalized = "";
-		filteredLayout = null;
-		filteredNodes = [];
-		selectedNodePath = null;
-		renderDetails(null);
-		if (currentLayout) {
-			renderLayout(currentLayout, selectedNodePath);
-		}
-		updateSearchSummary("", 0);
-	};
-
 	searchForm?.addEventListener("submit", (event) => {
 		event.preventDefault();
 		applySearch(searchInput?.value ?? "");
@@ -643,9 +868,6 @@ const attachEventHandlers = () => {
 	});
 
 	searchClear?.addEventListener("click", () => {
-		if (searchInput) {
-			searchInput.value = "";
-		}
 		clearSearch();
 	});
 

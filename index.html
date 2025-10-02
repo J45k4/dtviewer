@@ -104,6 +104,19 @@
                 cursor: default;
             }
 
+            #status-section {
+                display: flex;
+                flex-direction: column;
+                gap: 0.5rem;
+            }
+
+            #status-section .status-row {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.75rem;
+                align-items: flex-start;
+            }
+
             #status {
                 white-space: pre-wrap;
                 font-family: "Cascadia Code", Consolas, monospace;
@@ -116,6 +129,36 @@
 
             #status.warning {
                 color: #8a6d3b;
+            }
+
+            #warnings-toggle-label {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.35rem;
+                font-size: 0.9rem;
+                color: #334155;
+                user-select: none;
+            }
+
+            #warnings-toggle-label.disabled {
+                opacity: 0.5;
+                pointer-events: none;
+            }
+
+            #warnings-toggle-label input {
+                width: 1.05rem;
+                height: 1.05rem;
+                accent-color: #1d4ed8;
+            }
+
+            #warnings-panel {
+                margin: 0;
+                padding: 0.65rem 0.8rem;
+                background: rgba(248, 250, 252, 0.85);
+                border-radius: 8px;
+                border: 1px solid rgba(148, 163, 184, 0.5);
+                font-family: "Cascadia Code", Consolas, monospace;
+                white-space: pre-wrap;
             }
 
             .hidden {
@@ -174,6 +217,30 @@
                 width: 100%;
                 border-collapse: collapse;
                 font-size: 0.95rem;
+            }
+
+            .property-links {
+                margin-top: 0.35rem;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.35rem;
+            }
+
+            .property-links .node-link {
+                border: 1px solid rgba(37, 99, 235, 0.4);
+                background: rgba(59, 130, 246, 0.12);
+                color: #1d4ed8;
+                border-radius: 999px;
+                padding: 0.2rem 0.6rem;
+                font-size: 0.82rem;
+                cursor: pointer;
+                display: inline-flex;
+                align-items: center;
+                gap: 0.3rem;
+            }
+
+            .property-links .node-link:hover {
+                background: rgba(59, 130, 246, 0.2);
             }
 
             #details-content th,
@@ -252,8 +319,15 @@
                 <p id="search-summary" aria-live="polite" aria-atomic="true"></p>
             </div>
         </header>
-        <section>
-            <p id="status">Select a DTS file to visualize its hierarchy.</p>
+        <section id="status-section">
+            <div class="status-row">
+                <p id="status">Select a DTS file to visualize its hierarchy.</p>
+                <label id="warnings-toggle-label">
+                    <input type="checkbox" id="warnings-checkbox" />
+                    Show warnings
+                </label>
+            </div>
+            <pre id="warnings-panel" class="hidden" aria-live="polite" aria-atomic="true"></pre>
         </section>
         <main id="workspace">
             <div id="viewer-wrapper">
