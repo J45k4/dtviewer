@@ -672,24 +672,28 @@ const getConnectedEndpointPaths = (path: string): string[] => {
 };
 
 const focusNodeByPath = (path: string) => {
-	const target = nodeByPath.get(path);
-	if (!target) {
-		return;
-	}
+        const target = nodeByPath.get(path);
+        if (!target) {
+                return;
+        }
 
-	let layoutToUse = filteredLayout;
-	if (layoutToUse && !layoutToUse.nodes.some((node) => node.node.path === path)) {
-		clearSearch();
-		layoutToUse = currentLayout;
-	} else if (!layoutToUse) {
-		layoutToUse = currentLayout;
-	}
+        const hasActiveFilters = Boolean(activeFilterNormalized) || activeStatusFilter !== "all";
+        if (hasActiveFilters) {
+                const currentlyVisible =
+                        filteredLayout?.nodes.some((node) => node.node.path === path) ?? false;
+                if (!currentlyVisible) {
+                        ensureForcedVisibility(path);
+                        shouldAutoFitView = true;
+                        applyFilters();
+                }
+        }
 
-	if (!layoutToUse) {
-		return;
-	}
+        const layoutToUse = filteredLayout ?? currentLayout;
+        if (!layoutToUse) {
+                return;
+        }
 
-	let layoutNode = findLayoutNodeByPath(path, layoutToUse);
+        let layoutNode = findLayoutNodeByPath(path, layoutToUse);
 	if (!layoutNode && layoutToUse !== currentLayout) {
 		layoutNode = findLayoutNodeByPath(path, currentLayout);
 	}
