@@ -1574,41 +1574,62 @@ const attachEventHandlers = () => {
 		canvas.addEventListener(
 			"wheel",
 			(event) => {
-				if (!event.ctrlKey) {
-					return;
-				}
-				event.preventDefault();
 				const layout = filteredLayout ?? currentLayout;
 				if (!layout) {
 					return;
 				}
+
+				if (event.ctrlKey) {
+					event.preventDefault();
+					if (isPanning) {
+						endPan();
+					}
+					const rect = canvas.getBoundingClientRect();
+					const pointerX = event.clientX - rect.left;
+					const pointerY = event.clientY - rect.top;
+					const metrics = computeCanvasMetrics(layout);
+					const worldX = (pointerX - metrics.translateX) / viewScale;
+					const worldY = (pointerY - metrics.translateY) / viewScale;
+					const zoomFactor = Math.exp(-event.deltaY * ZOOM_SENSITIVITY);
+					const nextScale = clamp(viewScale * zoomFactor, minViewScale, maxViewScale);
+					if (nextScale === viewScale) {
+						return;
+					}
+					const nextMetrics = computeCanvasMetrics(layout, nextScale);
+					const newTranslateX = pointerX - worldX * nextScale;
+					const newTranslateY = pointerY - worldY * nextScale;
+					viewOffset = {
+						x: newTranslateX - nextMetrics.baseTranslateX,
+						y: newTranslateY - nextMetrics.baseTranslateY,
+					};
+					viewScale = nextScale;
+					shouldAutoFitView = false;
+					renderLayout(layout, selectedNodePath);
+					return;
+				}
+
+				event.preventDefault();
 				if (isPanning) {
 					endPan();
 				}
-				const rect = canvas.getBoundingClientRect();
-				const pointerX = event.clientX - rect.left;
-				const pointerY = event.clientY - rect.top;
-				const metrics = computeCanvasMetrics(layout);
-                                const worldX = (pointerX - metrics.translateX) / viewScale;
-                                const worldY = (pointerY - metrics.translateY) / viewScale;
-                                const zoomFactor = Math.exp(-event.deltaY * ZOOM_SENSITIVITY);
-                                const nextScale = clamp(viewScale * zoomFactor, minViewScale, maxViewScale);
-                                if (nextScale === viewScale) {
-                                        return;
-                                }
-                                const nextMetrics = computeCanvasMetrics(layout, nextScale);
-                                const newTranslateX = pointerX - worldX * nextScale;
-                                const newTranslateY = pointerY - worldY * nextScale;
-                                viewOffset = {
-                                        x: newTranslateX - nextMetrics.baseTranslateX,
-                                        y: newTranslateY - nextMetrics.baseTranslateY,
-                                };
-                                viewScale = nextScale;
-                                shouldAutoFitView = false;
-                                const activeLayout = filteredLayout ?? currentLayout;
-                                if (activeLayout) {
-                                        renderLayout(activeLayout, selectedNodePath);
-                                }
+				const deltaMode = event.deltaMode;
+				const deltaUnit =
+					deltaMode === 1
+						? 16
+						: deltaMode === 2
+						? canvas.clientHeight || viewerWrapper?.clientHeight || 400
+						: 1;
+				const panX = event.deltaX * deltaUnit;
+				const panY = event.deltaY * deltaUnit;
+				if (Math.abs(panX) < 1e-3 && Math.abs(panY) < 1e-3) {
+					return;
+				}
+				viewOffset = {
+					x: viewOffset.x - panX,
+					y: viewOffset.y - panY,
+				};
+				shouldAutoFitView = false;
+				renderLayout(layout, selectedNodePath);
 			},
 			{ passive: false },
 		);
