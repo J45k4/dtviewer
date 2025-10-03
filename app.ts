@@ -1,14 +1,14 @@
 import { dtsPare } from "./dts";
 import type { DtsNode, DtsProperty, DtsValue } from "./dts";
 import {
-        CANVAS_PADDING,
-        NODE_GAP,
-        NODE_HEIGHT,
-        NODE_WIDTH,
-        layoutTree as radialLayout,
-        type LayoutNode,
-        type LayoutResult,
-        type ReferenceEdge,
+	CANVAS_PADDING,
+	NODE_GAP,
+	NODE_HEIGHT,
+	NODE_WIDTH,
+	layoutTree as radialLayout,
+	type LayoutNode,
+	type LayoutResult,
+	type ReferenceEdge,
 } from "./layout";
 
 type StatusFilter = "all" | "okay" | "disabled";
@@ -19,322 +19,329 @@ const statusElement = document.querySelector<HTMLParagraphElement>("#status");
 const canvas = document.querySelector<HTMLCanvasElement>("#viewer-canvas");
 const dropOverlay = document.querySelector<HTMLDivElement>("#drop-overlay");
 const viewerWrapper = document.querySelector<HTMLDivElement>("#viewer-wrapper");
-const detailsTitle = document.querySelector<HTMLHeadingElement>("#details-title");
-const detailsContent = document.querySelector<HTMLDivElement>("#details-content");
+const detailsTitle =
+	document.querySelector<HTMLHeadingElement>("#details-title");
+const detailsContent =
+	document.querySelector<HTMLDivElement>("#details-content");
 const searchForm = document.querySelector<HTMLFormElement>("#search-form");
 const searchInput = document.querySelector<HTMLInputElement>("#search-input");
 const searchClear = document.querySelector<HTMLButtonElement>("#search-clear");
-const searchSummary = document.querySelector<HTMLParagraphElement>("#search-summary");
-const statusFilterSelect = document.querySelector<HTMLSelectElement>("#status-filter");
-const warningsToggle = document.querySelector<HTMLInputElement>("#warnings-checkbox");
-const warningsToggleLabel = document.querySelector<HTMLLabelElement>("#warnings-toggle-label");
+const searchSummary =
+	document.querySelector<HTMLParagraphElement>("#search-summary");
+const statusFilterSelect =
+	document.querySelector<HTMLSelectElement>("#status-filter");
+const warningsToggle =
+	document.querySelector<HTMLInputElement>("#warnings-checkbox");
+const warningsToggleLabel = document.querySelector<HTMLLabelElement>(
+	"#warnings-toggle-label",
+);
 const warningsPanel = document.querySelector<HTMLPreElement>("#warnings-panel");
 
 const ctx = canvas?.getContext("2d");
 
 const SAMPLE_DTS = (() => {
-        const lines: string[] = [
-                "/ {",
-                "        model = \"Sample i.MX8 Board\";",
-                "        compatible = \"fsl,imx8mp\";",
-                "",
-                "        chosen {",
-                "                bootargs = \"console=ttyS0,115200 earlycon\";",
-                "                stdout-path = &uart3;",
-                "        };",
-                "",
-                "        aliases {",
-                "                ethernet0 = &fec1;",
-                "                i2c0 = &i2c1;",
-                "        };",
-                "",
-                "        memory@40000000 {",
-                "                device_type = \"memory\";",
-                "                reg = <0x40000000 0x40000000>;",
-                "        };",
-                "",
-                "        reserved-memory {",
-                "                #address-cells = <0x2>;",
-                "                #size-cells = <0x2>;",
-                "                ranges;",
-                "",
-                "                framebuffer@90000000 {",
-                "                        reg = <0x0 0x90000000 0x0 0x800000>;",
-                "                        no-map;",
-                "                };",
-                "",
-                "                rpmsg@0x400000 {",
-                "                        reg = <0x0 0x400000 0x0 0x400000>;",
-                "                };",
-                "        };",
-                "",
-                "        soc@0 {",
-                "                #address-cells = <0x1>;",
-                "                #size-cells = <0x1>;",
-                "                compatible = \"simple-bus\";",
-                "                ranges;",
-                "",
-                "                uart3: serial@30890000 {",
-                "                        compatible = \"fsl,imx8mp-uart\", \"fsl,imx21-uart\";",
-                "                        reg = <0x30890000 0x1000>;",
-                "                        interrupts = <0x0 0x37 0x4>;",
-                "                        clocks = <0x2 0x19>;",
-                "                        status = \"okay\";",
-                "                };",
-                "",
-                "                i2c1: i2c@30a20000 {",
-                "                        compatible = \"fsl,imx8mp-i2c\", \"fsl,imx21-i2c\";",
-                "                        reg = <0x30a20000 0x10000>;",
-                "                        interrupts = <0x0 0x24 0x4>;",
-                "                        clocks = <0x2 0x7d>;",
-                "                        status = \"okay\";",
-                "",
-                "                        temperature-sensor@48 {",
-                "                                compatible = \"ti,tmp102\";",
-                "                                reg = <0x48>;",
-                "                                status = \"okay\";",
-                "                        };",
-                "",
-                "                        touchscreen@4a {",
-                "                                compatible = \"edt,edt-ft5406\";",
-                "                                reg = <0x4a>;",
-                "                                interrupt-parent = <0x2>;",
-                "                                interrupts = <0x6a 0x1>;",
-                "                                reset-gpios = <0x3 0x1f 0x1>;",
-                "                                status = \"okay\";",
-                "                        };",
-                "                };",
-                "",
-                "                fec1: ethernet@30be0000 {",
-                "                        compatible = \"fsl,imx8mp-fec\";",
-                "                        reg = <0x30be0000 0x10000>;",
-                "                        phy-handle = <0xa1>;",
-                "                        phy-mode = \"rgmii-id\";",
-                "                        status = \"okay\";",
-                "                };",
-                "",
-                "                gpu@38000000 {",
-                "                        compatible = \"vivante,gc7000\";",
-                "                        reg = <0x38000000 0x40000>;",
-                "                        interrupts = <0x0 0x94 0x4>;",
-                "                        status = \"okay\";",
-                "                };",
-                "",
-                "                ldb-display-controller {",
-                "                        lvds-channel@0 {",
-                "                                port@0 {",
-                "                                        endpoint {",
-                "                                                remote-endpoint = <0x85>;",
-                "                                                phandle = <0x5f>;",
-                "                                        };",
-                "                                };",
-                "",
-                "                                port@1 {",
-                "                                        endpoint {",
-                "                                                remote-endpoint = <0x86>;",
-                "                                                phandle = <0xa2>;",
-                "                                        };",
-                "                                };",
-                "                        };",
-                "                };",
-        ];
+	const lines: string[] = [
+		"/ {",
+		'        model = "Sample i.MX8 Board";',
+		'        compatible = "fsl,imx8mp";',
+		"",
+		"        chosen {",
+		'                bootargs = "console=ttyS0,115200 earlycon";',
+		"                stdout-path = &uart3;",
+		"        };",
+		"",
+		"        aliases {",
+		"                ethernet0 = &fec1;",
+		"                i2c0 = &i2c1;",
+		"        };",
+		"",
+		"        memory@40000000 {",
+		'                device_type = "memory";',
+		"                reg = <0x40000000 0x40000000>;",
+		"        };",
+		"",
+		"        reserved-memory {",
+		"                #address-cells = <0x2>;",
+		"                #size-cells = <0x2>;",
+		"                ranges;",
+		"",
+		"                framebuffer@90000000 {",
+		"                        reg = <0x0 0x90000000 0x0 0x800000>;",
+		"                        no-map;",
+		"                };",
+		"",
+		"                rpmsg@0x400000 {",
+		"                        reg = <0x0 0x400000 0x0 0x400000>;",
+		"                };",
+		"        };",
+		"",
+		"        soc@0 {",
+		"                #address-cells = <0x1>;",
+		"                #size-cells = <0x1>;",
+		'                compatible = "simple-bus";',
+		"                ranges;",
+		"",
+		"                uart3: serial@30890000 {",
+		'                        compatible = "fsl,imx8mp-uart", "fsl,imx21-uart";',
+		"                        reg = <0x30890000 0x1000>;",
+		"                        interrupts = <0x0 0x37 0x4>;",
+		"                        clocks = <0x2 0x19>;",
+		'                        status = "okay";',
+		"                };",
+		"",
+		"                i2c1: i2c@30a20000 {",
+		'                        compatible = "fsl,imx8mp-i2c", "fsl,imx21-i2c";',
+		"                        reg = <0x30a20000 0x10000>;",
+		"                        interrupts = <0x0 0x24 0x4>;",
+		"                        clocks = <0x2 0x7d>;",
+		'                        status = "okay";',
+		"",
+		"                        temperature-sensor@48 {",
+		'                                compatible = "ti,tmp102";',
+		"                                reg = <0x48>;",
+		'                                status = "okay";',
+		"                        };",
+		"",
+		"                        touchscreen@4a {",
+		'                                compatible = "edt,edt-ft5406";',
+		"                                reg = <0x4a>;",
+		"                                interrupt-parent = <0x2>;",
+		"                                interrupts = <0x6a 0x1>;",
+		"                                reset-gpios = <0x3 0x1f 0x1>;",
+		'                                status = "okay";',
+		"                        };",
+		"                };",
+		"",
+		"                fec1: ethernet@30be0000 {",
+		'                        compatible = "fsl,imx8mp-fec";',
+		"                        reg = <0x30be0000 0x10000>;",
+		"                        phy-handle = <0xa1>;",
+		'                        phy-mode = "rgmii-id";',
+		'                        status = "okay";',
+		"                };",
+		"",
+		"                gpu@38000000 {",
+		'                        compatible = "vivante,gc7000";',
+		"                        reg = <0x38000000 0x40000>;",
+		"                        interrupts = <0x0 0x94 0x4>;",
+		'                        status = "okay";',
+		"                };",
+		"",
+		"                ldb-display-controller {",
+		"                        lvds-channel@0 {",
+		"                                port@0 {",
+		"                                        endpoint {",
+		"                                                remote-endpoint = <0x85>;",
+		"                                                phandle = <0x5f>;",
+		"                                        };",
+		"                                };",
+		"",
+		"                                port@1 {",
+		"                                        endpoint {",
+		"                                                remote-endpoint = <0x86>;",
+		"                                                phandle = <0xa2>;",
+		"                                        };",
+		"                                };",
+		"                        };",
+		"                };",
+	];
 
-        const addI2cCluster = (busIndex: number) => {
-                const busAddr = (0x30a40000 + busIndex * 0x10000).toString(16);
-                const busLabel = `i2c${busIndex + 2}`;
-                lines.push(
-                        `                ${busLabel}: i2c@${busAddr} {`,
-                        "                        compatible = \"fsl,imx8mp-i2c\", \"fsl,imx21-i2c\";",
-                        `                        reg = <0x${busAddr} 0x10000>;`,
-                        "                        interrupts = <0x0 0x24 0x4>;",
-                        "                        clocks = <0x2 0x7d>;",
-                        "                        status = \"okay\";",
-                );
+	const addI2cCluster = (busIndex: number) => {
+		const busAddr = (0x30a40000 + busIndex * 0x10000).toString(16);
+		const busLabel = `i2c${busIndex + 2}`;
+		lines.push(
+			`                ${busLabel}: i2c@${busAddr} {`,
+			'                        compatible = "fsl,imx8mp-i2c", "fsl,imx21-i2c";',
+			`                        reg = <0x${busAddr} 0x10000>;`,
+			"                        interrupts = <0x0 0x24 0x4>;",
+			"                        clocks = <0x2 0x7d>;",
+			'                        status = "okay";',
+		);
 
-                for (let device = 0; device < 6; device += 1) {
-                        const address = 0x10 + busIndex * 0x10 + device;
-                        const addrHex = address.toString(16);
-                        lines.push(
-                                `                        sensor@${addrHex} {`,
-                                `                                compatible = \"nxp,s${busIndex}${device}18\";`,
-                                `                                reg = <0x${addrHex}>;`,
-                                "                                status = \"okay\";",
-                                "                        };",
-                        );
-                }
+		for (let device = 0; device < 6; device += 1) {
+			const address = 0x10 + busIndex * 0x10 + device;
+			const addrHex = address.toString(16);
+			lines.push(
+				`                        sensor@${addrHex} {`,
+				`                                compatible = \"nxp,s${busIndex}${device}18\";`,
+				`                                reg = <0x${addrHex}>;`,
+				'                                status = "okay";',
+				"                        };",
+			);
+		}
 
-                lines.push("                };");
-        };
+		lines.push("                };");
+	};
 
-        for (let bus = 0; bus < 5; bus += 1) {
-                addI2cCluster(bus);
-        }
+	for (let bus = 0; bus < 5; bus += 1) {
+		addI2cCluster(bus);
+	}
 
-        const addSpiController = (index: number) => {
-                const baseAddr = 0x30800000 + index * 0x10000;
-                const addrHex = baseAddr.toString(16);
-                lines.push(
-                        `                spi${index}: spi@${addrHex} {`,
-                        "                        compatible = \"fsl,imx8mp-ecspi\";",
-                        `                        reg = <0x${addrHex} 0x10000>;`,
-                        "                        #address-cells = <0x1>;",
-                        "                        #size-cells = <0x0>;",
-                        "                        status = \"okay\";",
-                );
+	const addSpiController = (index: number) => {
+		const baseAddr = 0x30800000 + index * 0x10000;
+		const addrHex = baseAddr.toString(16);
+		lines.push(
+			`                spi${index}: spi@${addrHex} {`,
+			'                        compatible = "fsl,imx8mp-ecspi";',
+			`                        reg = <0x${addrHex} 0x10000>;`,
+			"                        #address-cells = <0x1>;",
+			"                        #size-cells = <0x0>;",
+			'                        status = "okay";',
+		);
 
-                for (let chip = 0; chip < 4; chip += 1) {
-                        const chipSelect = chip.toString(16);
-                        lines.push(
-                                `                        flash@${chipSelect} {`,
-                                "                                compatible = \"jedec,spi-nor\";",
-                                `                                reg = <0x${chipSelect}>;`,
-                                "                                spi-max-frequency = <0x1312d00>;",
-                                "                                status = \"okay\";",
-                                "                        };",
-                        );
-                }
+		for (let chip = 0; chip < 4; chip += 1) {
+			const chipSelect = chip.toString(16);
+			lines.push(
+				`                        flash@${chipSelect} {`,
+				'                                compatible = "jedec,spi-nor";',
+				`                                reg = <0x${chipSelect}>;`,
+				"                                spi-max-frequency = <0x1312d00>;",
+				'                                status = "okay";',
+				"                        };",
+			);
+		}
 
-                lines.push("                };");
-        };
+		lines.push("                };");
+	};
 
-        for (let spiIndex = 0; spiIndex < 4; spiIndex += 1) {
-                addSpiController(spiIndex);
-        }
+	for (let spiIndex = 0; spiIndex < 4; spiIndex += 1) {
+		addSpiController(spiIndex);
+	}
 
-        lines.push(
-                "",
-                "                audio@30000000 {",
-                "                        compatible = \"fsl,imx8mp-sai\";",
-                "                        reg = <0x30000000 0x10000>;",
-                "                        status = \"okay\";",
-                "",
-                "                        codec@0 {",
-                "                                compatible = \"nxp,sgtl5000\";",
-                "                                reg = <0x0>;",
-                "                                status = \"okay\";",
-                "                        };",
-                "                };",
-                "",
-                "                pcie@33800000 {",
-                "                        compatible = \"fsl,imx8mp-pcie\";",
-                "                        reg = <0x33800000 0x400000>;",
-                "                        status = \"okay\";",
-                "",
-                "                        bridge@0 {",
-                "                                compatible = \"pci,pci-bridge\";",
-                "                                reg = <0x0 0x0 0x0 0x0>;",
-                "                                status = \"okay\";",
-                "",
-                "                                endpoint@0,0 {",
-                "                                        reg = <0x0 0x0 0x0 0x0>;",
-                "                                        compatible = \"pci14e4,165f\";",
-                "                                };",
-                "",
-                "                                endpoint@1,0 {",
-                "                                        reg = <0x1 0x0 0x0 0x0>;",
-                "                                        compatible = \"pci8086,1539\";",
-                "                                };",
-                "                        };",
-                "                };",
-        );
+	lines.push(
+		"",
+		"                audio@30000000 {",
+		'                        compatible = "fsl,imx8mp-sai";',
+		"                        reg = <0x30000000 0x10000>;",
+		'                        status = "okay";',
+		"",
+		"                        codec@0 {",
+		'                                compatible = "nxp,sgtl5000";',
+		"                                reg = <0x0>;",
+		'                                status = "okay";',
+		"                        };",
+		"                };",
+		"",
+		"                pcie@33800000 {",
+		'                        compatible = "fsl,imx8mp-pcie";',
+		"                        reg = <0x33800000 0x400000>;",
+		'                        status = "okay";',
+		"",
+		"                        bridge@0 {",
+		'                                compatible = "pci,pci-bridge";',
+		"                                reg = <0x0 0x0 0x0 0x0>;",
+		'                                status = "okay";',
+		"",
+		"                                endpoint@0,0 {",
+		"                                        reg = <0x0 0x0 0x0 0x0>;",
+		'                                        compatible = "pci14e4,165f";',
+		"                                };",
+		"",
+		"                                endpoint@1,0 {",
+		"                                        reg = <0x1 0x0 0x0 0x0>;",
+		'                                        compatible = "pci8086,1539";',
+		"                                };",
+		"                        };",
+		"                };",
+	);
 
-        lines.push("        };", "");
+	lines.push("        };", "");
 
-        lines.push(
-                "        backlight: backlight@0 {",
-                "                compatible = \"pwm-backlight\";",
-                "                pwms = <0x7 0x0 0x3e8 0x0>;",
-                "                brightness-levels = <0x0 0x1e 0x3c 0x64 0x96 0xc8 0xff>;",
-                "                default-brightness-level = <0x3>;",
-                "                status = \"okay\";",
-                "        };",
-                "",
-                "        panel@0 {",
-                "                compatible = \"panel-lvds\";",
-                "                backlight = <0xa1>;",
-                "                status = \"okay\";",
-                "",
-                "                port {",
-                "                        panel_in: endpoint@0 {",
-                "                                remote-endpoint = <0x5f>;",
-                "                                phandle = <0x85>;",
-                "                        };",
-                "                };",
-                "        };",
-                "",
-                "        usb@32f10108 {",
-                "                compatible = \"fsl,imx8mp-dwc3\";",
-                "                phandle = <0x83>;",
-                "                clocks = <0x2 0x10c 0x2 0x140>;",
-                "                clock-names = \"hsio\", \"suspend\";",
-                "                interrupts = <0x0 0x95 0x4>;",
-                "                ranges;",
-                "                status = \"okay\";",
-                "",
-                "                usb@38200000 {",
-                "                        compatible = \"snps,dwc3\";",
-                "                        phys = <0x83 0x83>;",
-                "                        phy-names = \"usb2-phy\", \"usb3-phy\";",
-                "                        dr_mode = \"host\";",
-                "                        status = \"okay\";",
-                "                };",
-                "        };",
-                "",
-                "        leds {",
-                "                compatible = \"gpio-leds\";",
-                "",
-                "                status-led {",
-                "                        gpios = <0x4 0x12 0x0>;",
-                "                        default-state = \"on\";",
-                "                };",
-                "",
-                "                heartbeat-led {",
-                "                        gpios = <0x4 0x13 0x0>;",
-                "                        linux,default-trigger = \"heartbeat\";",
-                "                };",
-                "        };",
-                "",
-                "        regulators {",
-                "                compatible = \"simple-bus\";",
-                "",
-                "                buck@0 {",
-                "                        regulator-name = \"vdd_soc\";",
-                "                        regulator-min-microvolt = <0xf4240>;",
-                "                        regulator-max-microvolt = <0x16e360>;",
-                "                };",
-                "",
-                "                buck@1 {",
-                "                        regulator-name = \"vdd_gpu\";",
-                "                        regulator-min-microvolt = <0xf4240>;",
-                "                        regulator-max-microvolt = <0x16e360>;",
-                "                };",
-                "        };",
-                "",
-                "        thermal-zones {",
-                "                board {",
-                "                        polling-delay-passive = <0x3e8>;",
-                "                        polling-delay = <0x7d0>;",
-                "",
-                "                        trips {",
-                "                                cpu-crit {",
-                "                                        temperature = <0x1312d0>;",
-                "                                        hysteresis = <0x64>;",
-                "                                        type = \"critical\";",
-                "                                };",
-                "                        };",
-                "                };",
-                "        };",
-                "",
-                "        watchdog@30280000 {",
-                "                compatible = \"fsl,imx8mp-wdt\";",
-                "                reg = <0x30280000 0x10000>;",
-                "                status = \"okay\";",
-                "        };",
-        );
+	lines.push(
+		"        backlight: backlight@0 {",
+		'                compatible = "pwm-backlight";',
+		"                pwms = <0x7 0x0 0x3e8 0x0>;",
+		"                brightness-levels = <0x0 0x1e 0x3c 0x64 0x96 0xc8 0xff>;",
+		"                default-brightness-level = <0x3>;",
+		'                status = "okay";',
+		"        };",
+		"",
+		"        panel@0 {",
+		'                compatible = "panel-lvds";',
+		"                backlight = <0xa1>;",
+		'                status = "okay";',
+		"",
+		"                port {",
+		"                        panel_in: endpoint@0 {",
+		"                                remote-endpoint = <0x5f>;",
+		"                                phandle = <0x85>;",
+		"                        };",
+		"                };",
+		"        };",
+		"",
+		"        usb@32f10108 {",
+		'                compatible = "fsl,imx8mp-dwc3";',
+		"                phandle = <0x83>;",
+		"                clocks = <0x2 0x10c 0x2 0x140>;",
+		'                clock-names = "hsio", "suspend";',
+		"                interrupts = <0x0 0x95 0x4>;",
+		"                ranges;",
+		'                status = "okay";',
+		"",
+		"                usb@38200000 {",
+		'                        compatible = "snps,dwc3";',
+		"                        phys = <0x83 0x83>;",
+		'                        phy-names = "usb2-phy", "usb3-phy";',
+		'                        dr_mode = "host";',
+		'                        status = "okay";',
+		"                };",
+		"        };",
+		"",
+		"        leds {",
+		'                compatible = "gpio-leds";',
+		"",
+		"                status-led {",
+		"                        gpios = <0x4 0x12 0x0>;",
+		'                        default-state = "on";',
+		"                };",
+		"",
+		"                heartbeat-led {",
+		"                        gpios = <0x4 0x13 0x0>;",
+		'                        linux,default-trigger = "heartbeat";',
+		"                };",
+		"        };",
+		"",
+		"        regulators {",
+		'                compatible = "simple-bus";',
+		"",
+		"                buck@0 {",
+		'                        regulator-name = "vdd_soc";',
+		"                        regulator-min-microvolt = <0xf4240>;",
+		"                        regulator-max-microvolt = <0x16e360>;",
+		"                };",
+		"",
+		"                buck@1 {",
+		'                        regulator-name = "vdd_gpu";',
+		"                        regulator-min-microvolt = <0xf4240>;",
+		"                        regulator-max-microvolt = <0x16e360>;",
+		"                };",
+		"        };",
+		"",
+		"        thermal-zones {",
+		"                board {",
+		"                        polling-delay-passive = <0x3e8>;",
+		"                        polling-delay = <0x7d0>;",
+		"",
+		"                        trips {",
+		"                                cpu-crit {",
+		"                                        temperature = <0x1312d0>;",
+		"                                        hysteresis = <0x64>;",
+		'                                        type = "critical";',
+		"                                };",
+		"                        };",
+		"                };",
+		"        };",
+		"",
+		"        watchdog@30280000 {",
+		'                compatible = "fsl,imx8mp-wdt";',
+		"                reg = <0x30280000 0x10000>;",
+		'                status = "okay";',
+		"        };",
+	);
 
-        lines.push("};");
+	lines.push("};");
 
-        return lines.join("\n");
+	return lines.join("\n");
 })();
 
 let currentLayout: LayoutResult | null = null;
@@ -362,7 +369,12 @@ let panOrigin = { x: 0, y: 0 };
 
 if (statusFilterSelect) {
 	const defaultValue = statusFilterSelect.value;
-	activeStatusFilter = defaultValue === "disabled" ? "disabled" : defaultValue === "okay" ? "okay" : "all";
+	activeStatusFilter =
+		defaultValue === "disabled"
+			? "disabled"
+			: defaultValue === "okay"
+				? "okay"
+				: "all";
 }
 let currentWarnings: string[] = [];
 let lastStatus: {
@@ -379,9 +391,9 @@ const nodeByPhandle = new Map<number, DtsNode>();
 // remote-endpoint / remote-endpoints properties (and the nodes containing those properties).
 const endpointPaths = new Set<string>();
 // Reference edges (phandle or label references) collected from properties.
-type ReferenceEdge = { source: string; target: string; viaProperty: string; kind: "phandle" | "label" };
 let referenceEdges: ReferenceEdge[] = [];
 const forcedVisiblePaths = new Set<string>();
+const forcedVisibilityAnchors = new Map<string, string | null>();
 const HANDLE_PROPERTY_NAMES = new Set([
 	"phandle",
 	"linux,phandle",
@@ -415,15 +427,85 @@ const collectNumbersFromValue = (value: DtsValue): number[] => {
 	return collected;
 };
 
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+const formatHandleNumber = (value: number): string =>
+	value >= 10 ? `0x${value.toString(16)}` : String(value);
+
+type PropertyReference = {
+	target: DtsNode;
+	display: string;
+	kind: "phandle" | "label";
+};
+
+const collectPropertyReferences = (
+	property: DtsProperty,
+): PropertyReference[] => {
+	const references: PropertyReference[] = [];
+	const seen = new Set<string>();
+	const nameLower = property.name.toLowerCase();
+	const allowNumeric =
+		HANDLE_PROPERTY_NAMES.has(nameLower) ||
+		property.type === "cell-list" ||
+		property.type === "number" ||
+		property.type === "mixed";
+
+	const addReference = (
+		target: DtsNode,
+		display: string,
+		kind: PropertyReference["kind"],
+	) => {
+		const key = `${target.path}|${kind}|${display}`;
+		if (seen.has(key)) {
+			return;
+		}
+		seen.add(key);
+		references.push({ target, display, kind });
+	};
+
+	const inspect = (candidate: unknown) => {
+		if (Array.isArray(candidate)) {
+			candidate.forEach(inspect);
+			return;
+		}
+
+		if (candidate && typeof candidate === "object") {
+			if (
+				"ref" in candidate &&
+				typeof (candidate as { ref?: unknown }).ref === "string"
+			) {
+				const label = String((candidate as { ref: string }).ref);
+				const target = nodeByLabel.get(label);
+				if (target) {
+					addReference(target, `&${label}`, "label");
+				}
+			}
+			return;
+		}
+
+		if (
+			allowNumeric &&
+			typeof candidate === "number" &&
+			Number.isFinite(candidate)
+		) {
+			const target = nodeByPhandle.get(candidate);
+			if (target) {
+				addReference(target, formatHandleNumber(candidate), "phandle");
+			}
+		}
+	};
+
+	inspect(property.value as unknown);
+	return references;
+};
+
+const clamp = (value: number, min: number, max: number) =>
+	Math.min(max, Math.max(min, value));
 
 const getParentPath = (path: string): string | null => {
 	if (!path || path === "/") {
 		return null;
 	}
-	const trimmed = path.endsWith("/") && path !== "/"
-		? path.replace(/\/+$/, "")
-		: path;
+	const trimmed =
+		path.endsWith("/") && path !== "/" ? path.replace(/\/+$/, "") : path;
 	const index = trimmed.lastIndexOf("/");
 	if (index <= 0) {
 		return "/";
@@ -432,7 +514,10 @@ const getParentPath = (path: string): string | null => {
 	return parent ? parent : "/";
 };
 
-const ensureForcedVisibility = (path: string): boolean => {
+const ensureForcedVisibility = (
+	path: string,
+	anchorPath?: string | null,
+): boolean => {
 	if (!nodeByPath.has(path)) {
 		return false;
 	}
@@ -442,6 +527,17 @@ const ensureForcedVisibility = (path: string): boolean => {
 		if (!forcedVisiblePaths.has(current)) {
 			forcedVisiblePaths.add(current);
 			changed = true;
+		}
+		if (!forcedVisibilityAnchors.has(current)) {
+			forcedVisibilityAnchors.set(current, null);
+		}
+		if (current === path && anchorPath !== undefined) {
+			const normalizedAnchor =
+				anchorPath && anchorPath !== path ? anchorPath : null;
+			if (forcedVisibilityAnchors.get(current) !== normalizedAnchor) {
+				forcedVisibilityAnchors.set(current, normalizedAnchor);
+				changed = true;
+			}
 		}
 		if (current === "/") {
 			break;
@@ -472,7 +568,10 @@ const rebuildNodeIndexes = (root: DtsNode | null) => {
 		}
 
 		node.properties.forEach((property) => {
-			if (property.name === "phandle" || property.name === "linux,phandle") {
+			if (
+				property.name === "phandle" ||
+				property.name === "linux,phandle"
+			) {
 				collectNumbersFromValue(property.value).forEach((handle) => {
 					nodeByPhandle.set(handle, node);
 				});
@@ -486,7 +585,10 @@ const rebuildNodeIndexes = (root: DtsNode | null) => {
 	visit(root);
 
 	const REMOTE_NAMES = new Set(["remote-endpoint", "remote-endpoints"]);
-	const visitLabelRefs = (value: unknown, onLabel: (label: string) => void) => {
+	const visitLabelRefs = (
+		value: unknown,
+		onLabel: (label: string) => void,
+	) => {
 		if (Array.isArray(value)) {
 			value.forEach((entry) => visitLabelRefs(entry, onLabel));
 			return;
@@ -529,23 +631,21 @@ const rebuildNodeIndexes = (root: DtsNode | null) => {
 		});
 	});
 
-	// Build reference edges exclusively for remote-endpoint links.
+	// Build reference edges for any property that links via labels or phandles.
 	const edgeDedup = new Set<string>();
 	const undirectedSeen = new Set<string>();
 	const tryAdd = (edge: ReferenceEdge) => {
 		if (edge.source === edge.target) {
 			return;
 		}
-		if (!endpointPaths.has(edge.target)) {
-			return;
-		}
-		const undirectedKey = edge.source < edge.target
-			? `${edge.source}|${edge.target}`
-			: `${edge.target}|${edge.source}`;
+		const undirectedKey =
+			edge.source < edge.target
+				? `${edge.source}|${edge.target}`
+				: `${edge.target}|${edge.source}`;
 		if (undirectedSeen.has(undirectedKey)) {
 			return;
 		}
-		const key = `${edge.source}|${edge.target}|${edge.viaProperty}`;
+		const key = `${edge.source}|${edge.target}|${edge.viaProperty}|${edge.kind}`;
 		if (edgeDedup.has(key)) {
 			return;
 		}
@@ -556,42 +656,14 @@ const rebuildNodeIndexes = (root: DtsNode | null) => {
 
 	allNodes.forEach((node) => {
 		node.properties.forEach((prop) => {
-			if (!REMOTE_NAMES.has(prop.name)) {
-				return;
-			}
-			const visitVal = (val: unknown) => {
-				if (Array.isArray(val)) {
-					val.forEach(visitVal);
-					return;
-				}
-				if (val && typeof val === "object") {
-					if ("ref" in val && typeof (val as { ref?: unknown }).ref === "string") {
-						const label = (val as { ref: string }).ref;
-						const target = nodeByLabel.get(label);
-						if (target) {
-							tryAdd({
-								source: node.path,
-								target: target.path,
-								viaProperty: prop.name,
-								kind: "label",
-							});
-						}
-					}
-					return;
-				}
-				if (typeof val === "number" && Number.isFinite(val)) {
-					const target = nodeByPhandle.get(val);
-					if (target) {
-						tryAdd({
-							source: node.path,
-							target: target.path,
-							viaProperty: prop.name,
-							kind: "phandle",
-						});
-					}
-				}
-			};
-			visitVal(prop.value as unknown);
+			collectPropertyReferences(prop).forEach((ref) => {
+				tryAdd({
+					source: node.path,
+					target: ref.target.path,
+					viaProperty: prop.name,
+					kind: ref.kind,
+				});
+			});
 		});
 	});
 };
@@ -646,14 +718,122 @@ const appendMetaRow = (
 	container.append(dt, dd);
 };
 
-const formatHandleNumber = (value: number): string =>
-	value >= 10 ? `0x${value.toString(16)}` : String(value);
-
-const findLayoutNodeByPath = (path: string, layout: LayoutResult | null): LayoutNode | null => {
+const findLayoutNodeByPath = (
+	path: string,
+	layout: LayoutResult | null,
+): LayoutNode | null => {
 	if (!layout) {
 		return null;
 	}
 	return layout.nodes.find((node) => node.node.path === path) ?? null;
+};
+
+const pruneForcedVisibilityAnchors = () => {
+	const stale: string[] = [];
+	forcedVisibilityAnchors.forEach((_, path) => {
+		if (!forcedVisiblePaths.has(path)) {
+			stale.push(path);
+		}
+	});
+	stale.forEach((path) => forcedVisibilityAnchors.delete(path));
+};
+
+const recomputeLayoutMetrics = (layout: LayoutResult) => {
+	let minX = Infinity;
+	let maxX = -Infinity;
+	let minY = Infinity;
+	let maxY = -Infinity;
+
+	layout.nodes.forEach((node) => {
+		minX = Math.min(minX, node.x);
+		maxX = Math.max(maxX, node.x + NODE_WIDTH);
+		minY = Math.min(minY, node.y - NODE_HEIGHT / 2);
+		maxY = Math.max(maxY, node.y + NODE_HEIGHT / 2);
+	});
+
+	if (!Number.isFinite(minX) || !Number.isFinite(maxX)) {
+		minX = -NODE_WIDTH / 2;
+		maxX = NODE_WIDTH / 2;
+	}
+	if (!Number.isFinite(minY) || !Number.isFinite(maxY)) {
+		minY = -NODE_HEIGHT / 2;
+		maxY = NODE_HEIGHT / 2;
+	}
+
+	layout.bounds = { minX, maxX, minY, maxY };
+	layout.size = {
+		width: Math.max(1, maxX - minX + CANVAS_PADDING * 2),
+		height: Math.max(1, maxY - minY + CANVAS_PADDING * 2),
+	};
+	layout.offset = {
+		x: CANVAS_PADDING - minX,
+		y: CANVAS_PADDING - minY,
+	};
+};
+
+const anchorForcedNodesNearSource = (
+	layout: LayoutResult,
+	anchors: Map<string, string | null>,
+) => {
+	if (!anchors.size) {
+		return;
+	}
+
+	const nodesByPath = new Map<string, LayoutNode>();
+	layout.nodes.forEach((node) => {
+		nodesByPath.set(node.node.path, node);
+	});
+
+	const buckets = new Map<string, LayoutNode[]>();
+	anchors.forEach((anchorPath, forcedPath) => {
+		if (!anchorPath) {
+			return;
+		}
+		const anchorNode = nodesByPath.get(anchorPath);
+		const forcedNode = nodesByPath.get(forcedPath);
+		if (!anchorNode || !forcedNode) {
+			return;
+		}
+		const list = buckets.get(anchorPath);
+		if (list) {
+			list.push(forcedNode);
+		} else {
+			buckets.set(anchorPath, [forcedNode]);
+		}
+	});
+
+	buckets.forEach((nodes, anchorPath) => {
+		const anchorNode = nodesByPath.get(anchorPath);
+		if (!anchorNode) {
+			return;
+		}
+		const total = nodes.length;
+		if (!total) {
+			return;
+		}
+		const anchorCenterX = anchorNode.x + NODE_WIDTH / 2;
+		const anchorCenterY = anchorNode.y;
+		const spread = Math.PI / 1.5;
+		const step = total === 1 ? 0 : spread / Math.max(total - 1, 1);
+		const start = total === 1 ? 0 : -spread / 2;
+		const radius = Math.max(NODE_WIDTH, NODE_HEIGHT) + NODE_GAP;
+		nodes.forEach((node, index) => {
+			const angleOffset = start + step * index;
+			const targetCenterX =
+				anchorCenterX + Math.cos(angleOffset) * radius;
+			const targetCenterY =
+				anchorCenterY + Math.sin(angleOffset) * radius;
+			node.x = targetCenterX - NODE_WIDTH / 2;
+			node.y = targetCenterY;
+			node.portal = true;
+			node.portalSourcePath = anchorNode.node.path;
+			node.angle = Math.atan2(targetCenterY, targetCenterX);
+			node.radius = Math.hypot(targetCenterX, targetCenterY);
+			node.depth = Math.max(anchorNode.depth + 1, node.depth);
+		});
+	});
+
+	recomputeLayoutMetrics(layout);
 };
 
 const getConnectedEndpointPaths = (path: string): string[] => {
@@ -677,14 +857,24 @@ const focusNodeByPath = (path: string) => {
 		return;
 	}
 
-	let layoutToUse = filteredLayout;
-	if (layoutToUse && !layoutToUse.nodes.some((node) => node.node.path === path)) {
-		clearSearch();
-		layoutToUse = currentLayout;
-	} else if (!layoutToUse) {
-		layoutToUse = currentLayout;
+	const hasActiveFilters =
+		Boolean(activeFilterNormalized) || activeStatusFilter !== "all";
+	if (hasActiveFilters) {
+		const currentlyVisible =
+			filteredLayout?.nodes.some((node) => node.node.path === path) ??
+			false;
+		if (!currentlyVisible) {
+			const anchorPath =
+				selectedNodePath && selectedNodePath !== path
+					? selectedNodePath
+					: null;
+			ensureForcedVisibility(path, anchorPath);
+			shouldAutoFitView = false;
+			applyFilters();
+		}
 	}
 
+	const layoutToUse = filteredLayout ?? currentLayout;
 	if (!layoutToUse) {
 		return;
 	}
@@ -700,57 +890,10 @@ const focusNodeByPath = (path: string) => {
 	selectLayoutNode(layoutNode);
 };
 
-type PropertyLink = {
-	target: DtsNode;
-	display: string;
-};
+type PropertyLink = PropertyReference;
 
-const resolvePropertyLinks = (property: DtsProperty): PropertyLink[] => {
-	const links: PropertyLink[] = [];
-	const seen = new Set<string>();
-	const nameLower = property.name.toLowerCase();
-        const allowNumeric =
-                HANDLE_PROPERTY_NAMES.has(nameLower) ||
-                property.type === "cell-list" ||
-                property.type === "number";
-
-	const addLink = (target: DtsNode, display: string) => {
-		const key = `${target.path}|${display}`;
-		if (seen.has(key)) {
-			return;
-		}
-		seen.add(key);
-		links.push({ target, display });
-	};
-
-	const inspect = (candidate: unknown) => {
-		if (Array.isArray(candidate)) {
-			candidate.forEach(inspect);
-			return;
-		}
-
-		if (candidate && typeof candidate === "object") {
-			if ("ref" in candidate && typeof (candidate as { ref?: unknown }).ref === "string") {
-				const label = String((candidate as { ref: string }).ref);
-				const target = nodeByLabel.get(label);
-				if (target) {
-					addLink(target, `&${label}`);
-				}
-			}
-			return;
-		}
-
-		if (allowNumeric && typeof candidate === "number" && Number.isFinite(candidate)) {
-			const target = nodeByPhandle.get(candidate);
-			if (target) {
-				addLink(target, formatHandleNumber(candidate));
-			}
-		}
-	};
-
-	inspect(property.value as unknown);
-	return links;
-};
+const resolvePropertyLinks = (property: DtsProperty): PropertyLink[] =>
+	collectPropertyReferences(property);
 
 const renderDetails = (node: DtsNode | null) => {
 	if (!detailsContent || !detailsTitle) {
@@ -762,7 +905,8 @@ const renderDetails = (node: DtsNode | null) => {
 	if (!node) {
 		detailsTitle.textContent = "Node details";
 		const placeholder = document.createElement("p");
-		placeholder.textContent = "Click any node in the tree to inspect its attributes and properties.";
+		placeholder.textContent =
+			"Click any node in the tree to inspect its attributes and properties.";
 		detailsContent.append(placeholder);
 		return;
 	}
@@ -886,100 +1030,105 @@ const updateStatus = (
 	}
 
 	statusElement.textContent = lines.join("\n");
-	lastStatus = { origin, nodeCount, errors: [...errors], warnings: [...warnings] };
+	lastStatus = {
+		origin,
+		nodeCount,
+		errors: [...errors],
+		warnings: [...warnings],
+	};
 };
 
 const buildLayout = (root: DtsNode): LayoutResult =>
-        radialLayout(root, {
-                referenceEdges,
-                endpointPaths,
-                nodeLookup: nodeByPath,
-        });
+	radialLayout(root, {
+		referenceEdges,
+		endpointPaths,
+		nodeLookup: nodeByPath,
+	});
 
 const prepareCanvas = (width: number, height: number) => {
-        if (!canvas || !ctx) {
-                return;
-        }
+	if (!canvas || !ctx) {
+		return;
+	}
 
-        const ratio = window.devicePixelRatio ?? 1;
-        canvas.style.width = `${width}px`;
-        canvas.style.height = `${height}px`;
-        canvas.width = Math.max(Math.floor(width * ratio), 1);
-        canvas.height = Math.max(Math.floor(height * ratio), 1);
-        ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-        ctx.clearRect(0, 0, width, height);
+	const ratio = window.devicePixelRatio ?? 1;
+	canvas.style.width = `${width}px`;
+	canvas.style.height = `${height}px`;
+	canvas.width = Math.max(Math.floor(width * ratio), 1);
+	canvas.height = Math.max(Math.floor(height * ratio), 1);
+	ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+	ctx.clearRect(0, 0, width, height);
 };
 
 const computeFitScale = (layout: LayoutResult) => {
-        const wrapperWidth = viewerWrapper?.clientWidth ?? layout.size.width;
-        const wrapperHeight = viewerWrapper?.clientHeight ?? layout.size.height;
-        if (wrapperWidth <= 0 || wrapperHeight <= 0) {
-                return 1;
-        }
-        const scaleX = wrapperWidth / layout.size.width;
-        const scaleY = wrapperHeight / layout.size.height;
-        const scale = Math.min(scaleX, scaleY);
-        if (!Number.isFinite(scale) || scale <= 0) {
-                return 1;
-        }
-        return scale;
+	const wrapperWidth = viewerWrapper?.clientWidth ?? layout.size.width;
+	const wrapperHeight = viewerWrapper?.clientHeight ?? layout.size.height;
+	if (wrapperWidth <= 0 || wrapperHeight <= 0) {
+		return 1;
+	}
+	const scaleX = wrapperWidth / layout.size.width;
+	const scaleY = wrapperHeight / layout.size.height;
+	const scale = Math.min(scaleX, scaleY);
+	if (!Number.isFinite(scale) || scale <= 0) {
+		return 1;
+	}
+	return scale;
 };
 
 const fitViewToLayout = (
-        layout: LayoutResult,
-        options: { preserveExistingTransform?: boolean } = {},
+	layout: LayoutResult,
+	options: { preserveExistingTransform?: boolean } = {},
 ) => {
-        const { preserveExistingTransform = false } = options;
-        const previousAutoFit = lastAutoFitScale;
-        const fitScale = computeFitScale(layout);
-        minViewScale = fitScale;
-        maxViewScale = Math.max(BASE_MAX_VIEW_SCALE, fitScale);
-        lastAutoFitScale = fitScale;
+	const { preserveExistingTransform = false } = options;
+	const previousAutoFit = lastAutoFitScale;
+	const fitScale = computeFitScale(layout);
+	minViewScale = fitScale;
+	maxViewScale = Math.max(BASE_MAX_VIEW_SCALE, fitScale);
+	lastAutoFitScale = fitScale;
 
-        if (preserveExistingTransform) {
-                const wasAtAutoFit =
-                        previousAutoFit !== null &&
-                        Math.abs(viewScale - previousAutoFit) < 1e-3 &&
-                        Math.abs(viewOffset.x) < 1e-3 &&
-                        Math.abs(viewOffset.y) < 1e-3;
-                if (wasAtAutoFit) {
-                        viewScale = fitScale;
-                        viewOffset = { x: 0, y: 0 };
-                        return;
-                }
-                const clampedScale = clamp(viewScale, minViewScale, maxViewScale);
-                if (Math.abs(clampedScale - viewScale) > 1e-6) {
-                        viewScale = clampedScale;
-                        viewOffset = { x: 0, y: 0 };
-                }
-                return;
-        }
+	if (preserveExistingTransform) {
+		const wasAtAutoFit =
+			previousAutoFit !== null &&
+			Math.abs(viewScale - previousAutoFit) < 1e-3 &&
+			Math.abs(viewOffset.x) < 1e-3 &&
+			Math.abs(viewOffset.y) < 1e-3;
+		if (wasAtAutoFit) {
+			viewScale = fitScale;
+			viewOffset = { x: 0, y: 0 };
+			return;
+		}
+		const clampedScale = clamp(viewScale, minViewScale, maxViewScale);
+		if (Math.abs(clampedScale - viewScale) > 1e-6) {
+			viewScale = clampedScale;
+			viewOffset = { x: 0, y: 0 };
+		}
+		return;
+	}
 
-        viewScale = clamp(fitScale, minViewScale, maxViewScale);
-        viewOffset = { x: 0, y: 0 };
+	viewScale = clamp(fitScale, minViewScale, maxViewScale);
+	viewOffset = { x: 0, y: 0 };
 };
 
 const computeCanvasMetrics = (layout: LayoutResult, scale = viewScale) => {
-        const scaledWidth = layout.size.width * scale;
-        const scaledHeight = layout.size.height * scale;
-        const wrapperWidth = viewerWrapper?.clientWidth ?? scaledWidth;
-        const wrapperHeight = viewerWrapper?.clientHeight ?? scaledHeight;
-        const width = Math.max(scaledWidth, wrapperWidth);
-        const height = Math.max(scaledHeight, wrapperHeight);
-        const extraX = Math.max(0, (width - scaledWidth) / 2);
-        const extraY = Math.max(0, (height - scaledHeight) / 2);
-        const baseTranslateX = layout.offset.x * scale + extraX;
-        const baseTranslateY = layout.offset.y * scale + extraY;
-        return {
-                width,
-                height,
-                translateX: baseTranslateX + viewOffset.x,
-                translateY: baseTranslateY + viewOffset.y,
-                baseTranslateX,
-                baseTranslateY,
-                extraX,
-                extraY,
-        };
+	const scaledWidth = layout.size.width * scale;
+	const scaledHeight = layout.size.height * scale;
+	const wrapperWidth = viewerWrapper?.clientWidth ?? scaledWidth;
+	const wrapperHeight = viewerWrapper?.clientHeight ?? scaledHeight;
+	const width = Math.max(scaledWidth, wrapperWidth);
+	const height = Math.max(scaledHeight, wrapperHeight);
+	const extraX = Math.max(0, (width - scaledWidth) / 2);
+	const extraY = Math.max(0, (height - scaledHeight) / 2);
+	const baseTranslateX = layout.offset.x * scale + extraX;
+	const baseTranslateY = layout.offset.y * scale + extraY;
+	return {
+		width,
+		height,
+		translateX: baseTranslateX + viewOffset.x,
+		translateY: baseTranslateY + viewOffset.y,
+		baseTranslateX,
+		baseTranslateY,
+		extraX,
+		extraY,
+	};
 };
 
 const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
@@ -1040,8 +1189,12 @@ const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
 	};
 
 	referenceEdges.forEach((edge) => {
-		const sourceNode = pickRepresentative(layoutNodesByPath.get(edge.source));
-		const targetNode = pickRepresentative(layoutNodesByPath.get(edge.target));
+		const sourceNode = pickRepresentative(
+			layoutNodesByPath.get(edge.source),
+		);
+		const targetNode = pickRepresentative(
+			layoutNodesByPath.get(edge.target),
+		);
 		if (!sourceNode || !targetNode) {
 			return;
 		}
@@ -1054,13 +1207,19 @@ const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
 		const offsetY = Math.abs(toX - fromX) < 1 ? 60 : 40;
 		const ctrlX = midX;
 		const ctrlY = midY - offsetY;
-		const touchesSelection = selectedPath === edge.source || selectedPath === edge.target;
+		const touchesSelection =
+			selectedPath === edge.source || selectedPath === edge.target;
 		ctx.beginPath();
 		ctx.setLineDash(touchesSelection ? [5, 5] : [8, 6]);
 		ctx.lineWidth = touchesSelection ? 1.8 : 1.2;
-		ctx.strokeStyle = edge.kind === "label"
-			? (touchesSelection ? "rgba(147, 51, 234, 0.9)" : "rgba(168, 85, 247, 0.45)")
-			: (touchesSelection ? "rgba(2, 132, 199, 0.9)" : "rgba(14, 165, 233, 0.45)");
+		ctx.strokeStyle =
+			edge.kind === "label"
+				? touchesSelection
+					? "rgba(147, 51, 234, 0.9)"
+					: "rgba(168, 85, 247, 0.45)"
+				: touchesSelection
+					? "rgba(2, 132, 199, 0.9)"
+					: "rgba(14, 165, 233, 0.45)";
 		ctx.moveTo(fromX, fromY);
 		ctx.quadraticCurveTo(ctrlX, ctrlY, toX, toY);
 		ctx.stroke();
@@ -1087,8 +1246,8 @@ const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
 			ctx.lineWidth = 2.2;
 		} else if (isPortal && isEndpoint) {
 			ctx.setLineDash([3, 3]);
-			ctx.fillStyle = "rgba(224, 242, 254, 0.9)";
-			ctx.strokeStyle = "rgba(2, 132, 199, 0.9)";
+			ctx.fillStyle = "rgba(252, 244, 214, 0.92)";
+			ctx.strokeStyle = "rgba(217, 119, 6, 0.88)";
 			ctx.lineWidth = 1.6;
 		} else if (isPortal) {
 			ctx.setLineDash([3, 3]);
@@ -1096,9 +1255,9 @@ const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
 			ctx.strokeStyle = "rgba(217, 119, 6, 0.9)";
 			ctx.lineWidth = 1.5;
 		} else if (isEndpoint) {
-			ctx.setLineDash([]);
-			ctx.fillStyle = "rgba(191, 219, 254, 0.85)";
-			ctx.strokeStyle = "rgba(96, 165, 250, 0.9)";
+			ctx.setLineDash([4, 3]);
+			ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+			ctx.strokeStyle = "rgba(71, 85, 105, 0.9)";
 			ctx.lineWidth = 1.4;
 		} else {
 			ctx.setLineDash([]);
@@ -1127,10 +1286,22 @@ const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
 		}
 		const subtitle = details.join(" · ");
 
-		ctx.fillStyle = isSelected ? "#f8fafc" : isPortal ? "#78350f" : isEndpoint ? "#0f172a" : "#111827";
+		ctx.fillStyle = isSelected
+			? "#f8fafc"
+			: isPortal
+				? "#78350f"
+				: isEndpoint
+					? "#1f2937"
+					: "#111827";
 		ctx.fillText(truncate(labelText, 28), left + 12, node.y - 10);
 
-		ctx.fillStyle = isSelected ? "#e5e7eb" : isPortal ? "#92400e" : isEndpoint ? "#1e3a8a" : "#4b5563";
+		ctx.fillStyle = isSelected
+			? "#e5e7eb"
+			: isPortal
+				? "#92400e"
+				: isEndpoint
+					? "#475569"
+					: "#4b5563";
 		ctx.fillText(truncate(subtitle, 32), left + 12, node.y + 10);
 	});
 
@@ -1159,30 +1330,31 @@ const displayTree = (source: string, origin: string) => {
 		return;
 	}
 
-        currentRoot = result.root;
-        currentLayout = buildLayout(result.root);
-        selectedNodePath = null;
-        selectedNode = null;
-        activeFilterRaw = "";
-        activeFilterNormalized = "";
-        rebuildNodeIndexes(currentRoot);
-        renderDetails(null);
-        if (canvas) {
-                canvas.style.cursor = "default";
-        }
-        filteredLayout = null;
-        filteredNodes = [];
-        forcedVisiblePaths.clear();
-        if (searchInput) {
-                searchInput.value = "";
-        }
-        viewOffset = { x: 0, y: 0 };
-        viewScale = 1;
-        minViewScale = BASE_MIN_VIEW_SCALE;
-        maxViewScale = BASE_MAX_VIEW_SCALE;
-        lastAutoFitScale = null;
-        shouldAutoFitView = true;
-        applyFilters();
+	currentRoot = result.root;
+	currentLayout = buildLayout(result.root);
+	selectedNodePath = null;
+	selectedNode = null;
+	activeFilterRaw = "";
+	activeFilterNormalized = "";
+	rebuildNodeIndexes(currentRoot);
+	renderDetails(null);
+	if (canvas) {
+		canvas.style.cursor = "default";
+	}
+	filteredLayout = null;
+	filteredNodes = [];
+	forcedVisiblePaths.clear();
+	forcedVisibilityAnchors.clear();
+	if (searchInput) {
+		searchInput.value = "";
+	}
+	viewOffset = { x: 0, y: 0 };
+	viewScale = 1;
+	minViewScale = BASE_MIN_VIEW_SCALE;
+	maxViewScale = BASE_MAX_VIEW_SCALE;
+	lastAutoFitScale = null;
+	shouldAutoFitView = true;
+	applyFilters();
 };
 
 const getLogicalPoint = (event: MouseEvent) => {
@@ -1239,18 +1411,22 @@ const selectLayoutNode = (layoutNode: LayoutNode) => {
 			}
 		});
 	}
-        if (shouldReapplyFilters) {
-                shouldAutoFitView = true;
-                applyFilters();
-                return;
-        }
+	if (shouldReapplyFilters) {
+		shouldAutoFitView = true;
+		applyFilters();
+		return;
+	}
 	const layoutForSelection = filteredLayout ?? currentLayout;
 	if (layoutForSelection) {
 		renderLayout(layoutForSelection, selectedNodePath);
 	}
 };
 
-const updateSearchSummary = (query: string, matchCount: number, statusFilter: StatusFilter) => {
+const updateSearchSummary = (
+	query: string,
+	matchCount: number,
+	statusFilter: StatusFilter,
+) => {
 	if (!searchSummary) {
 		return;
 	}
@@ -1299,7 +1475,10 @@ const nodeMatchesNormalized = (node: DtsNode, normalized: string): boolean => {
 		node.path,
 		node.label ?? "",
 		node.unitAddress ?? "",
-		...node.properties.flatMap((prop) => [prop.name, formatValue(prop.value)]),
+		...node.properties.flatMap((prop) => [
+			prop.name,
+			formatValue(prop.value),
+		]),
 	];
 	return haystacks.some((text) => text.toLowerCase().includes(normalized));
 };
@@ -1338,7 +1517,9 @@ const nodeMatchesStatus = (node: DtsNode, filter: StatusFilter): boolean => {
 	}
 	const status = getNodeStatus(node);
 	if (filter === "disabled") {
-		return status === "disabled" || status === "disable" || status === "off";
+		return (
+			status === "disabled" || status === "disable" || status === "off"
+		);
 	}
 	// Treat missing status as effectively "okay"
 	if (status === null) {
@@ -1358,7 +1539,9 @@ const filterDtsTree = (
 		.filter((child): child is DtsNode => child !== null);
 
 	const matchesStatus = nodeMatchesStatus(node, statusFilter);
-	const matchesSearch = normalized ? nodeMatchesNormalized(node, normalized) : true;
+	const matchesSearch = normalized
+		? nodeMatchesNormalized(node, normalized)
+		: true;
 	const isForced = forced.has(node.path);
 	const matchesSelf = matchesStatus && matchesSearch;
 	const shouldKeep = matchesSelf || isForced || filteredChildren.length > 0;
@@ -1369,7 +1552,9 @@ const filterDtsTree = (
 
 	const unchangedChildren =
 		filteredChildren.length === node.children.length &&
-		filteredChildren.every((child, index) => child === node.children[index]);
+		filteredChildren.every(
+			(child, index) => child === node.children[index],
+		);
 
 	if ((matchesSelf || isForced) && unchangedChildren) {
 		return node;
@@ -1386,6 +1571,7 @@ const buildFilteredLayout = (
 	normalized: string,
 	statusFilter: StatusFilter,
 	forced: Set<string>,
+	anchors: Map<string, string | null>,
 ): LayoutResult | null => {
 	if (!root) {
 		return null;
@@ -1399,7 +1585,9 @@ const buildFilteredLayout = (
 		return null;
 	}
 
-        return buildLayout(filteredRoot);
+	const layout = buildLayout(filteredRoot);
+	anchorForcedNodesNearSource(layout, anchors);
+	return layout;
 };
 
 const applyFilters = () => {
@@ -1408,8 +1596,17 @@ const applyFilters = () => {
 	const hasActiveFilters = Boolean(normalized) || statusFilter !== "all";
 	if (!hasActiveFilters) {
 		forcedVisiblePaths.clear();
+		forcedVisibilityAnchors.clear();
+	} else {
+		pruneForcedVisibilityAnchors();
 	}
-	filteredLayout = buildFilteredLayout(currentRoot, normalized, statusFilter, forcedVisiblePaths);
+	filteredLayout = buildFilteredLayout(
+		currentRoot,
+		normalized,
+		statusFilter,
+		forcedVisiblePaths,
+		forcedVisibilityAnchors,
+	);
 	filteredNodes = filteredLayout?.nodes ?? [];
 
 	if (hasActiveFilters) {
@@ -1423,11 +1620,15 @@ const applyFilters = () => {
 				const firstMatch =
 					(activeFilterNormalized
 						? currentNodes.find((node) =>
-							nodeMatchesNormalized(node.node, activeFilterNormalized),
-						)
+								nodeMatchesNormalized(
+									node.node,
+									activeFilterNormalized,
+								),
+							)
 						: undefined) ?? currentNodes[0]!;
 				selectedNodePath = firstMatch.node.path;
-				selectedNode = nodeByPath.get(selectedNodePath) ?? firstMatch.node;
+				selectedNode =
+					nodeByPath.get(selectedNodePath) ?? firstMatch.node;
 				renderDetails(selectedNode);
 			} else {
 				selectedNodePath = null;
@@ -1436,7 +1637,9 @@ const applyFilters = () => {
 			}
 		} else if (selectedNodePath) {
 			selectedNode =
-				nodeByPath.get(selectedNodePath) ?? existingSelection?.node ?? null;
+				nodeByPath.get(selectedNodePath) ??
+				existingSelection?.node ??
+				null;
 			renderDetails(selectedNode);
 		}
 	} else {
@@ -1449,7 +1652,8 @@ const applyFilters = () => {
 				selectedNode = null;
 				renderDetails(null);
 			} else {
-				selectedNode = nodeByPath.get(selectedNodePath) ?? baseNode.node;
+				selectedNode =
+					nodeByPath.get(selectedNodePath) ?? baseNode.node;
 				renderDetails(selectedNode);
 			}
 		} else if (!selectedNode) {
@@ -1457,49 +1661,59 @@ const applyFilters = () => {
 		}
 	}
 
-        const layoutForFilters = filteredLayout ?? (hasActiveFilters ? null : currentLayout);
-        if (layoutForFilters) {
-                if (shouldAutoFitView) {
-                        fitViewToLayout(layoutForFilters);
-                        shouldAutoFitView = false;
-                } else {
-                        fitViewToLayout(layoutForFilters, { preserveExistingTransform: true });
-                }
-                renderLayout(layoutForFilters, selectedNodePath);
-        } else if (canvas && ctx) {
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                minViewScale = BASE_MIN_VIEW_SCALE;
-                maxViewScale = BASE_MAX_VIEW_SCALE;
-                lastAutoFitScale = null;
-                viewOffset = { x: 0, y: 0 };
-                shouldAutoFitView = false;
-        }
+	const layoutForFilters =
+		filteredLayout ?? (hasActiveFilters ? null : currentLayout);
+	if (layoutForFilters) {
+		if (shouldAutoFitView) {
+			fitViewToLayout(layoutForFilters);
+			shouldAutoFitView = false;
+		} else {
+			fitViewToLayout(layoutForFilters, {
+				preserveExistingTransform: true,
+			});
+		}
+		renderLayout(layoutForFilters, selectedNodePath);
+	} else if (canvas && ctx) {
+		ctx.clearRect(0, 0, canvas.width, canvas.height);
+		minViewScale = BASE_MIN_VIEW_SCALE;
+		maxViewScale = BASE_MAX_VIEW_SCALE;
+		lastAutoFitScale = null;
+		viewOffset = { x: 0, y: 0 };
+		shouldAutoFitView = false;
+	}
 
 	const summaryCount = filteredLayout ? filteredNodes.length : 0;
-	updateSearchSummary(activeFilterRaw.trim(), summaryCount, activeStatusFilter);
+	updateSearchSummary(
+		activeFilterRaw.trim(),
+		summaryCount,
+		activeStatusFilter,
+	);
 };
 
 const applySearch = (query: string) => {
-        const normalized = normalizeFilter(query);
-        const changed = normalized !== activeFilterNormalized || query !== activeFilterRaw;
-        if (changed) {
-                forcedVisiblePaths.clear();
-                shouldAutoFitView = true;
-        }
-        activeFilterRaw = query;
-        activeFilterNormalized = normalized;
-        applyFilters();
+	const normalized = normalizeFilter(query);
+	const changed =
+		normalized !== activeFilterNormalized || query !== activeFilterRaw;
+	if (changed) {
+		forcedVisiblePaths.clear();
+		forcedVisibilityAnchors.clear();
+		shouldAutoFitView = true;
+	}
+	activeFilterRaw = query;
+	activeFilterNormalized = normalized;
+	applyFilters();
 };
 
 const clearSearch = () => {
-        activeFilterRaw = "";
-        activeFilterNormalized = "";
-        forcedVisiblePaths.clear();
-        if (searchInput) {
-                searchInput.value = "";
-        }
-        shouldAutoFitView = true;
-        applyFilters();
+	activeFilterRaw = "";
+	activeFilterNormalized = "";
+	forcedVisiblePaths.clear();
+	forcedVisibilityAnchors.clear();
+	if (searchInput) {
+		searchInput.value = "";
+	}
+	shouldAutoFitView = true;
+	applyFilters();
 };
 
 const handleFileSelection = async (file: File) => {
@@ -1546,13 +1760,19 @@ const attachEventHandlers = () => {
 		}
 	});
 
-        statusFilterSelect?.addEventListener("change", () => {
-                const value = statusFilterSelect.value;
-                activeStatusFilter = value === "disabled" ? "disabled" : value === "okay" ? "okay" : "all";
-                forcedVisiblePaths.clear();
-                shouldAutoFitView = true;
-                applyFilters();
-        });
+	statusFilterSelect?.addEventListener("change", () => {
+		const value = statusFilterSelect.value;
+		activeStatusFilter =
+			value === "disabled"
+				? "disabled"
+				: value === "okay"
+					? "okay"
+					: "all";
+		forcedVisiblePaths.clear();
+		forcedVisibilityAnchors.clear();
+		shouldAutoFitView = true;
+		applyFilters();
+	});
 
 	if (canvas) {
 		const endPan = () => {
@@ -1609,27 +1829,27 @@ const attachEventHandlers = () => {
 				}
 
 				event.preventDefault();
-				if (isPanning) {
-					endPan();
-				}
-				const deltaMode = event.deltaMode;
-				const deltaUnit =
-					deltaMode === 1
-						? 16
-						: deltaMode === 2
-						? canvas.clientHeight || viewerWrapper?.clientHeight || 400
-						: 1;
-				const panX = event.deltaX * deltaUnit;
-				const panY = event.deltaY * deltaUnit;
-				if (Math.abs(panX) < 1e-3 && Math.abs(panY) < 1e-3) {
-					return;
-				}
-				viewOffset = {
-					x: viewOffset.x - panX,
-					y: viewOffset.y - panY,
-				};
-				shouldAutoFitView = false;
-				renderLayout(layout, selectedNodePath);
+			if (isPanning) {
+				endPan();
+			}
+			const deltaMode = event.deltaMode;
+			const deltaUnit =
+				deltaMode === 1
+					? 16
+					: deltaMode === 2
+					? canvas.clientHeight || viewerWrapper?.clientHeight || 400
+					: 1;
+			const panX = event.deltaX * deltaUnit;
+			const panY = event.deltaY * deltaUnit;
+			if (Math.abs(panX) < 1e-3 && Math.abs(panY) < 1e-3) {
+				return;
+			}
+			viewOffset = {
+				x: viewOffset.x - panX,
+				y: viewOffset.y - panY,
+			};
+			shouldAutoFitView = false;
+			renderLayout(layout, selectedNodePath);
 			},
 			{ passive: false },
 		);
@@ -1722,18 +1942,18 @@ const attachEventHandlers = () => {
 		clearSearch();
 	});
 
-        window.addEventListener("resize", () => {
-                const layout = filteredLayout ?? currentLayout;
-                if (!layout) {
-                        return;
-                }
-                fitViewToLayout(layout, { preserveExistingTransform: true });
-                renderLayout(layout, selectedNodePath);
-        });
+	window.addEventListener("resize", () => {
+		const layout = filteredLayout ?? currentLayout;
+		if (!layout) {
+			return;
+		}
+		fitViewToLayout(layout, { preserveExistingTransform: true });
+		renderLayout(layout, selectedNodePath);
+	});
 
-        const dragState = {
-                enterDepth: 0,
-        };
+	const dragState = {
+		enterDepth: 0,
+	};
 
 	const hasFiles = (event: DragEvent) =>
 		Array.from(event.dataTransfer?.types ?? []).includes("Files");
@@ -1810,7 +2030,9 @@ const attachEventHandlers = () => {
 
 if (!ctx) {
 	statusElement?.classList.add("error");
-	statusElement?.append("\nCanvas rendering context unavailable in this browser.");
+	statusElement?.append(
+		"\nCanvas rendering context unavailable in this browser.",
+	);
 } else {
 	attachEventHandlers();
 }

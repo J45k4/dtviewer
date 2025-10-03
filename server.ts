@@ -1,8 +1,8 @@
-import index from "./index.html"
+import index from "./index.html";
 
 Bun.serve({
-    port: 6555,
-    routes: {
-        "/": index
-    }
-})
+	port: 6555,
+	routes: {
+		"/": index,
+	},
+});

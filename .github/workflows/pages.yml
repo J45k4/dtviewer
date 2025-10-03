@@ -1,116 +1,116 @@
 name: Deploy static site + PR previews
 
 on:
-  push:
-    branches: [ master ]
-  pull_request:
-    types: [opened, synchronize, reopened, closed]
-    branches: [ master ]
-  workflow_dispatch:
+    push:
+        branches: [master]
+    pull_request:
+        types: [opened, synchronize, reopened, closed]
+        branches: [master]
+    workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+    contents: write
+    pull-requests: write
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.event.pull_request.number) || format('pages-ref-{0}', github.ref) }}
-  cancel-in-progress: false
+    group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.event.pull_request.number) || format('pages-ref-{0}', github.ref) }}
+    cancel-in-progress: false
 
 env:
-  BUILD_DIR: dist
-  PAGES_BRANCH: gh-pages
+    BUILD_DIR: dist
+    PAGES_BRANCH: gh-pages
 
 jobs:
-  build:
-    if: github.event_name != 'pull_request' || github.event.action != 'closed'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
-      - run: bun install
-      - run: bun run bundle
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: site-build
-          path: ${{ env.BUILD_DIR }}
+    build:
+        if: github.event_name != 'pull_request' || github.event.action != 'closed'
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: oven-sh/setup-bun@v1
+              with:
+                  bun-version: latest
+            - run: bun install
+            - run: bun run bundle
+            - name: Upload build artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: site-build
+                  path: ${{ env.BUILD_DIR }}
 
-  # --- Deploy production (root) on push to master ---
-  deploy_prod:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/master')
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: site-build
-          path: ${{ env.BUILD_DIR }}
-      - name: Deploy to gh-pages (root)
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_branch: ${{ env.PAGES_BRANCH }}
-          publish_dir: ${{ env.BUILD_DIR }}
-          keep_files: true
+    # --- Deploy production (root) on push to master ---
+    deploy_prod:
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/master')
+        needs: build
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/download-artifact@v4
+              with:
+                  name: site-build
+                  path: ${{ env.BUILD_DIR }}
+            - name: Deploy to gh-pages (root)
+              uses: peaceiris/actions-gh-pages@v3
+              with:
+                  github_token: ${{ secrets.GITHUB_TOKEN }}
+                  publish_branch: ${{ env.PAGES_BRANCH }}
+                  publish_dir: ${{ env.BUILD_DIR }}
+                  keep_files: true
 
-  # --- Deploy PR preview to /pr/<num>/ ---
-  deploy_preview:
-    if: github.event_name == 'pull_request' && github.event.action != 'closed'
-    needs: build
-    runs-on: ubuntu-latest
-    env:
-      PREVIEW_DIR: pr/${{ github.event.pull_request.number }}
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: site-build
-          path: ${{ env.BUILD_DIR }}
-      - name: Deploy preview to gh-pages/pr/<num>/
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_branch: ${{ env.PAGES_BRANCH }}
-          publish_dir: ${{ env.BUILD_DIR }}
-          destination_dir: ${{ env.PREVIEW_DIR }}
-          keep_files: true
-      - name: Compute preview URL
-        id: compute_url
-        run: |
-          OWNER="${{ github.repository_owner }}"
-          REPO="${{ github.event.repository.name }}"
-          if [ "$REPO" = "${OWNER}.github.io" ]; then
-            BASE=""
-          else
-            BASE="/$REPO"
-          fi
-          echo "URL=https://${OWNER}.github.io${BASE}/${{ env.PREVIEW_DIR }}/" >> $GITHUB_OUTPUT
-      - name: Comment preview URL
-        uses: thollander/actions-comment-pull-request@v3
-        with:
-          message: |
-            🔍 **Preview ready**
-            ${{ steps.compute_url.outputs.URL }}
+    # --- Deploy PR preview to /pr/<num>/ ---
+    deploy_preview:
+        if: github.event_name == 'pull_request' && github.event.action != 'closed'
+        needs: build
+        runs-on: ubuntu-latest
+        env:
+            PREVIEW_DIR: pr/${{ github.event.pull_request.number }}
+        steps:
+            - uses: actions/download-artifact@v4
+              with:
+                  name: site-build
+                  path: ${{ env.BUILD_DIR }}
+            - name: Deploy preview to gh-pages/pr/<num>/
+              uses: peaceiris/actions-gh-pages@v3
+              with:
+                  github_token: ${{ secrets.GITHUB_TOKEN }}
+                  publish_branch: ${{ env.PAGES_BRANCH }}
+                  publish_dir: ${{ env.BUILD_DIR }}
+                  destination_dir: ${{ env.PREVIEW_DIR }}
+                  keep_files: true
+            - name: Compute preview URL
+              id: compute_url
+              run: |
+                  OWNER="${{ github.repository_owner }}"
+                  REPO="${{ github.event.repository.name }}"
+                  if [ "$REPO" = "${OWNER}.github.io" ]; then
+                    BASE=""
+                  else
+                    BASE="/$REPO"
+                  fi
+                  echo "URL=https://${OWNER}.github.io${BASE}/${{ env.PREVIEW_DIR }}/" >> $GITHUB_OUTPUT
+            - name: Comment preview URL
+              uses: thollander/actions-comment-pull-request@v3
+              with:
+                  message: |
+                      🔍 **Preview ready**
+                      ${{ steps.compute_url.outputs.URL }}
 
-  # --- Cleanup preview when PR is closed ---
-  cleanup_preview:
-    if: github.event_name == 'pull_request' && github.event.action == 'closed'
-    runs-on: ubuntu-latest
-    env:
-      PREVIEW_DIR: pr/${{ github.event.pull_request.number }}
-    steps:
-      - name: Checkout gh-pages
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.PAGES_BRANCH }}
-      - name: Remove preview directory
-        run: |
-          set -eux
-          git rm -r --ignore-unmatch "${{ env.PREVIEW_DIR }}" || true
-          if ! git diff --cached --quiet; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit -m "chore: remove preview for PR #${{ github.event.pull_request.number }}"
-            git push origin ${{ env.PAGES_BRANCH }}
-          fi
+    # --- Cleanup preview when PR is closed ---
+    cleanup_preview:
+        if: github.event_name == 'pull_request' && github.event.action == 'closed'
+        runs-on: ubuntu-latest
+        env:
+            PREVIEW_DIR: pr/${{ github.event.pull_request.number }}
+        steps:
+            - name: Checkout gh-pages
+              uses: actions/checkout@v4
+              with:
+                  ref: ${{ env.PAGES_BRANCH }}
+            - name: Remove preview directory
+              run: |
+                  set -eux
+                  git rm -r --ignore-unmatch "${{ env.PREVIEW_DIR }}" || true
+                  if ! git diff --cached --quiet; then
+                    git config user.name "github-actions[bot]"
+                    git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                    git commit -m "chore: remove preview for PR #${{ github.event.pull_request.number }}"
+                    git push origin ${{ env.PAGES_BRANCH }}
+                  fi
