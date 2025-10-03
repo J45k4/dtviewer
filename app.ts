@@ -1810,8 +1810,14 @@ const attachEventHandlers = () => {
 					const metrics = computeCanvasMetrics(layout);
 					const worldX = (pointerX - metrics.translateX) / viewScale;
 					const worldY = (pointerY - metrics.translateY) / viewScale;
-					const zoomFactor = Math.exp(-event.deltaY * ZOOM_SENSITIVITY);
-					const nextScale = clamp(viewScale * zoomFactor, minViewScale, maxViewScale);
+					const zoomFactor = Math.exp(
+						-event.deltaY * ZOOM_SENSITIVITY,
+					);
+					const nextScale = clamp(
+						viewScale * zoomFactor,
+						minViewScale,
+						maxViewScale,
+					);
 					if (nextScale === viewScale) {
 						return;
 					}
@@ -1829,27 +1835,29 @@ const attachEventHandlers = () => {
 				}
 
 				event.preventDefault();
-			if (isPanning) {
-				endPan();
-			}
-			const deltaMode = event.deltaMode;
-			const deltaUnit =
-				deltaMode === 1
-					? 16
-					: deltaMode === 2
-					? canvas.clientHeight || viewerWrapper?.clientHeight || 400
-					: 1;
-			const panX = event.deltaX * deltaUnit;
-			const panY = event.deltaY * deltaUnit;
-			if (Math.abs(panX) < 1e-3 && Math.abs(panY) < 1e-3) {
-				return;
-			}
-			viewOffset = {
-				x: viewOffset.x - panX,
-				y: viewOffset.y - panY,
-			};
-			shouldAutoFitView = false;
-			renderLayout(layout, selectedNodePath);
+				if (isPanning) {
+					endPan();
+				}
+				const deltaMode = event.deltaMode;
+				const deltaUnit =
+					deltaMode === 1
+						? 16
+						: deltaMode === 2
+							? canvas.clientHeight ||
+								viewerWrapper?.clientHeight ||
+								400
+							: 1;
+				const panX = event.deltaX * deltaUnit;
+				const panY = event.deltaY * deltaUnit;
+				if (Math.abs(panX) < 1e-3 && Math.abs(panY) < 1e-3) {
+					return;
+				}
+				viewOffset = {
+					x: viewOffset.x - panX,
+					y: viewOffset.y - panY,
+				};
+				shouldAutoFitView = false;
+				renderLayout(layout, selectedNodePath);
 			},
 			{ passive: false },
 		);
