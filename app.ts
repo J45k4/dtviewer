@@ -1,26 +1,17 @@
 import { dtsPare } from "./dts";
 import type { DtsNode, DtsProperty, DtsValue } from "./dts";
-
-type LayoutNode = {
-	node: DtsNode;
-	depth: number;
-	x: number;
-	y: number;
-	angle: number;
-	radius: number;
-	weight: number;
-	portal: boolean;
-	portalSourcePath: string | null;
-	children: LayoutNode[];
-};
+import {
+        CANVAS_PADDING,
+        NODE_GAP,
+        NODE_HEIGHT,
+        NODE_WIDTH,
+        layoutTree as radialLayout,
+        type LayoutNode,
+        type LayoutResult,
+        type ReferenceEdge,
+} from "./layout";
 
 type StatusFilter = "all" | "okay" | "disabled";
-
-const RADIAL_LAYER_GAP = 220;
-const NODE_WIDTH = 180;
-const NODE_HEIGHT = 48;
-const NODE_GAP = 24;
-const CANVAS_PADDING = 48;
 
 const fileInput = document.querySelector<HTMLInputElement>("#dts-input");
 const sampleButton = document.querySelector<HTMLButtonElement>("#load-sample");
@@ -41,69 +32,310 @@ const warningsPanel = document.querySelector<HTMLPreElement>("#warnings-panel");
 
 const ctx = canvas?.getContext("2d");
 
-const SAMPLE_DTS = `
-/ {
-	model = "Sample i.MX8 Board";
-	chosen {
-		bootargs = "console=ttyS0,115200";
-	};
+const SAMPLE_DTS = (() => {
+        const lines: string[] = [
+                "/ {",
+                "        model = \"Sample i.MX8 Board\";",
+                "        compatible = \"fsl,imx8mp\";",
+                "",
+                "        chosen {",
+                "                bootargs = \"console=ttyS0,115200 earlycon\";",
+                "                stdout-path = &uart3;",
+                "        };",
+                "",
+                "        aliases {",
+                "                ethernet0 = &fec1;",
+                "                i2c0 = &i2c1;",
+                "        };",
+                "",
+                "        memory@40000000 {",
+                "                device_type = \"memory\";",
+                "                reg = <0x40000000 0x40000000>;",
+                "        };",
+                "",
+                "        reserved-memory {",
+                "                #address-cells = <0x2>;",
+                "                #size-cells = <0x2>;",
+                "                ranges;",
+                "",
+                "                framebuffer@90000000 {",
+                "                        reg = <0x0 0x90000000 0x0 0x800000>;",
+                "                        no-map;",
+                "                };",
+                "",
+                "                rpmsg@0x400000 {",
+                "                        reg = <0x0 0x400000 0x0 0x400000>;",
+                "                };",
+                "        };",
+                "",
+                "        soc@0 {",
+                "                #address-cells = <0x1>;",
+                "                #size-cells = <0x1>;",
+                "                compatible = \"simple-bus\";",
+                "                ranges;",
+                "",
+                "                uart3: serial@30890000 {",
+                "                        compatible = \"fsl,imx8mp-uart\", \"fsl,imx21-uart\";",
+                "                        reg = <0x30890000 0x1000>;",
+                "                        interrupts = <0x0 0x37 0x4>;",
+                "                        clocks = <0x2 0x19>;",
+                "                        status = \"okay\";",
+                "                };",
+                "",
+                "                i2c1: i2c@30a20000 {",
+                "                        compatible = \"fsl,imx8mp-i2c\", \"fsl,imx21-i2c\";",
+                "                        reg = <0x30a20000 0x10000>;",
+                "                        interrupts = <0x0 0x24 0x4>;",
+                "                        clocks = <0x2 0x7d>;",
+                "                        status = \"okay\";",
+                "",
+                "                        temperature-sensor@48 {",
+                "                                compatible = \"ti,tmp102\";",
+                "                                reg = <0x48>;",
+                "                                status = \"okay\";",
+                "                        };",
+                "",
+                "                        touchscreen@4a {",
+                "                                compatible = \"edt,edt-ft5406\";",
+                "                                reg = <0x4a>;",
+                "                                interrupt-parent = <0x2>;",
+                "                                interrupts = <0x6a 0x1>;",
+                "                                reset-gpios = <0x3 0x1f 0x1>;",
+                "                                status = \"okay\";",
+                "                        };",
+                "                };",
+                "",
+                "                fec1: ethernet@30be0000 {",
+                "                        compatible = \"fsl,imx8mp-fec\";",
+                "                        reg = <0x30be0000 0x10000>;",
+                "                        phy-handle = <0xa1>;",
+                "                        phy-mode = \"rgmii-id\";",
+                "                        status = \"okay\";",
+                "                };",
+                "",
+                "                gpu@38000000 {",
+                "                        compatible = \"vivante,gc7000\";",
+                "                        reg = <0x38000000 0x40000>;",
+                "                        interrupts = <0x0 0x94 0x4>;",
+                "                        status = \"okay\";",
+                "                };",
+                "",
+                "                ldb-display-controller {",
+                "                        lvds-channel@0 {",
+                "                                port@0 {",
+                "                                        endpoint {",
+                "                                                remote-endpoint = <0x85>;",
+                "                                                phandle = <0x5f>;",
+                "                                        };",
+                "                                };",
+                "",
+                "                                port@1 {",
+                "                                        endpoint {",
+                "                                                remote-endpoint = <0x86>;",
+                "                                                phandle = <0xa2>;",
+                "                                        };",
+                "                                };",
+                "                        };",
+                "                };",
+        ];
 
-	usb@32f10108 {
-		compatible = "fsl,imx8mp-dwc3";
-		phandle = <0x83>;
-		clocks = <0x2 0x10c 0x2 0x140>;
-		clock-names = "hsio", "suspend";
-		interrupts = <0x0 0x95 0x4>;
-		ranges;
-		status = "okay";
+        const addI2cCluster = (busIndex: number) => {
+                const busAddr = (0x30a40000 + busIndex * 0x10000).toString(16);
+                const busLabel = `i2c${busIndex + 2}`;
+                lines.push(
+                        `                ${busLabel}: i2c@${busAddr} {`,
+                        "                        compatible = \"fsl,imx8mp-i2c\", \"fsl,imx21-i2c\";",
+                        `                        reg = <0x${busAddr} 0x10000>;`,
+                        "                        interrupts = <0x0 0x24 0x4>;",
+                        "                        clocks = <0x2 0x7d>;",
+                        "                        status = \"okay\";",
+                );
 
-		usb@38200000 {
-			compatible = "snps,dwc3";
-			phys = <0x83 0x83>;
-			phy-names = "usb2-phy", "usb3-phy";
-			dr_mode = "host";
-			status = "okay";
-		};
-	};
+                for (let device = 0; device < 6; device += 1) {
+                        const address = 0x10 + busIndex * 0x10 + device;
+                        const addrHex = address.toString(16);
+                        lines.push(
+                                `                        sensor@${addrHex} {`,
+                                `                                compatible = \"nxp,s${busIndex}${device}18\";`,
+                                `                                reg = <0x${addrHex}>;`,
+                                "                                status = \"okay\";",
+                                "                        };",
+                        );
+                }
 
-	ldb-display-controller {
-		lvds-channel@0 {
-			port@0 {
-				endpoint {
-					remote-endpoint = <0x85>;
-					phandle = <0x5f>;
-				};
-			};
+                lines.push("                };");
+        };
 
-			port@1 {
-				endpoint {
-					remote-endpoint = <0x86>;
-					phandle = <0xa2>;
-				};
-			};
-		};
-	};
-};
-`;
+        for (let bus = 0; bus < 5; bus += 1) {
+                addI2cCluster(bus);
+        }
 
-type LayoutResult = {
-	root: LayoutNode;
-	nodes: LayoutNode[];
-	bounds: {
-		minX: number;
-		maxX: number;
-		minY: number;
-		maxY: number;
-	};
-	size: {
-		width: number;
-		height: number;
-	};
-	offset: {
-		x: number;
-		y: number;
-	};
-};
+        const addSpiController = (index: number) => {
+                const baseAddr = 0x30800000 + index * 0x10000;
+                const addrHex = baseAddr.toString(16);
+                lines.push(
+                        `                spi${index}: spi@${addrHex} {`,
+                        "                        compatible = \"fsl,imx8mp-ecspi\";",
+                        `                        reg = <0x${addrHex} 0x10000>;`,
+                        "                        #address-cells = <0x1>;",
+                        "                        #size-cells = <0x0>;",
+                        "                        status = \"okay\";",
+                );
+
+                for (let chip = 0; chip < 4; chip += 1) {
+                        const chipSelect = chip.toString(16);
+                        lines.push(
+                                `                        flash@${chipSelect} {`,
+                                "                                compatible = \"jedec,spi-nor\";",
+                                `                                reg = <0x${chipSelect}>;`,
+                                "                                spi-max-frequency = <0x1312d00>;",
+                                "                                status = \"okay\";",
+                                "                        };",
+                        );
+                }
+
+                lines.push("                };");
+        };
+
+        for (let spiIndex = 0; spiIndex < 4; spiIndex += 1) {
+                addSpiController(spiIndex);
+        }
+
+        lines.push(
+                "",
+                "                audio@30000000 {",
+                "                        compatible = \"fsl,imx8mp-sai\";",
+                "                        reg = <0x30000000 0x10000>;",
+                "                        status = \"okay\";",
+                "",
+                "                        codec@0 {",
+                "                                compatible = \"nxp,sgtl5000\";",
+                "                                reg = <0x0>;",
+                "                                status = \"okay\";",
+                "                        };",
+                "                };",
+                "",
+                "                pcie@33800000 {",
+                "                        compatible = \"fsl,imx8mp-pcie\";",
+                "                        reg = <0x33800000 0x400000>;",
+                "                        status = \"okay\";",
+                "",
+                "                        bridge@0 {",
+                "                                compatible = \"pci,pci-bridge\";",
+                "                                reg = <0x0 0x0 0x0 0x0>;",
+                "                                status = \"okay\";",
+                "",
+                "                                endpoint@0,0 {",
+                "                                        reg = <0x0 0x0 0x0 0x0>;",
+                "                                        compatible = \"pci14e4,165f\";",
+                "                                };",
+                "",
+                "                                endpoint@1,0 {",
+                "                                        reg = <0x1 0x0 0x0 0x0>;",
+                "                                        compatible = \"pci8086,1539\";",
+                "                                };",
+                "                        };",
+                "                };",
+        );
+
+        lines.push("        };", "");
+
+        lines.push(
+                "        backlight: backlight@0 {",
+                "                compatible = \"pwm-backlight\";",
+                "                pwms = <0x7 0x0 0x3e8 0x0>;",
+                "                brightness-levels = <0x0 0x1e 0x3c 0x64 0x96 0xc8 0xff>;",
+                "                default-brightness-level = <0x3>;",
+                "                status = \"okay\";",
+                "        };",
+                "",
+                "        panel@0 {",
+                "                compatible = \"panel-lvds\";",
+                "                backlight = <0xa1>;",
+                "                status = \"okay\";",
+                "",
+                "                port {",
+                "                        panel_in: endpoint@0 {",
+                "                                remote-endpoint = <0x5f>;",
+                "                                phandle = <0x85>;",
+                "                        };",
+                "                };",
+                "        };",
+                "",
+                "        usb@32f10108 {",
+                "                compatible = \"fsl,imx8mp-dwc3\";",
+                "                phandle = <0x83>;",
+                "                clocks = <0x2 0x10c 0x2 0x140>;",
+                "                clock-names = \"hsio\", \"suspend\";",
+                "                interrupts = <0x0 0x95 0x4>;",
+                "                ranges;",
+                "                status = \"okay\";",
+                "",
+                "                usb@38200000 {",
+                "                        compatible = \"snps,dwc3\";",
+                "                        phys = <0x83 0x83>;",
+                "                        phy-names = \"usb2-phy\", \"usb3-phy\";",
+                "                        dr_mode = \"host\";",
+                "                        status = \"okay\";",
+                "                };",
+                "        };",
+                "",
+                "        leds {",
+                "                compatible = \"gpio-leds\";",
+                "",
+                "                status-led {",
+                "                        gpios = <0x4 0x12 0x0>;",
+                "                        default-state = \"on\";",
+                "                };",
+                "",
+                "                heartbeat-led {",
+                "                        gpios = <0x4 0x13 0x0>;",
+                "                        linux,default-trigger = \"heartbeat\";",
+                "                };",
+                "        };",
+                "",
+                "        regulators {",
+                "                compatible = \"simple-bus\";",
+                "",
+                "                buck@0 {",
+                "                        regulator-name = \"vdd_soc\";",
+                "                        regulator-min-microvolt = <0xf4240>;",
+                "                        regulator-max-microvolt = <0x16e360>;",
+                "                };",
+                "",
+                "                buck@1 {",
+                "                        regulator-name = \"vdd_gpu\";",
+                "                        regulator-min-microvolt = <0xf4240>;",
+                "                        regulator-max-microvolt = <0x16e360>;",
+                "                };",
+                "        };",
+                "",
+                "        thermal-zones {",
+                "                board {",
+                "                        polling-delay-passive = <0x3e8>;",
+                "                        polling-delay = <0x7d0>;",
+                "",
+                "                        trips {",
+                "                                cpu-crit {",
+                "                                        temperature = <0x1312d0>;",
+                "                                        hysteresis = <0x64>;",
+                "                                        type = \"critical\";",
+                "                                };",
+                "                        };",
+                "                };",
+                "        };",
+                "",
+                "        watchdog@30280000 {",
+                "                compatible = \"fsl,imx8mp-wdt\";",
+                "                reg = <0x30280000 0x10000>;",
+                "                status = \"okay\";",
+                "        };",
+        );
+
+        lines.push("};");
+
+        return lines.join("\n");
+})();
 
 let currentLayout: LayoutResult | null = null;
 let currentRoot: DtsNode | null = null;
@@ -116,8 +348,12 @@ let filteredLayout: LayoutResult | null = null;
 let filteredNodes: LayoutNode[] = [];
 let viewOffset = { x: 0, y: 0 };
 let viewScale = 1;
-const MIN_VIEW_SCALE = 0.3;
-const MAX_VIEW_SCALE = 3.2;
+const BASE_MIN_VIEW_SCALE = 0.05;
+const BASE_MAX_VIEW_SCALE = Number.POSITIVE_INFINITY;
+let minViewScale = BASE_MIN_VIEW_SCALE;
+let maxViewScale = BASE_MAX_VIEW_SCALE;
+let lastAutoFitScale: number | null = null;
+let shouldAutoFitView = false;
 const ZOOM_SENSITIVITY = 0.002;
 let isPanning = false;
 let panPointerId: number | null = null;
@@ -473,7 +709,10 @@ const resolvePropertyLinks = (property: DtsProperty): PropertyLink[] => {
 	const links: PropertyLink[] = [];
 	const seen = new Set<string>();
 	const nameLower = property.name.toLowerCase();
-	const allowNumeric = HANDLE_PROPERTY_NAMES.has(nameLower);
+        const allowNumeric =
+                HANDLE_PROPERTY_NAMES.has(nameLower) ||
+                property.type === "cell-list" ||
+                property.type === "number";
 
 	const addLink = (target: DtsNode, display: string) => {
 		const key = `${target.path}|${display}`;
@@ -650,276 +889,97 @@ const updateStatus = (
 	lastStatus = { origin, nodeCount, errors: [...errors], warnings: [...warnings] };
 };
 
-const layoutTree = (root: DtsNode): LayoutResult => {
-	const portalTargetsBySource = new Map<string, DtsNode[]>();
-
-	referenceEdges.forEach((edge) => {
-		const targetNode = nodeByPath.get(edge.target);
-		if (!targetNode) {
-			return;
-		}
-		if (!endpointPaths.has(targetNode.path)) {
-			return;
-		}
-		const list = portalTargetsBySource.get(edge.source);
-		if (list) {
-			if (!list.some((entry) => entry.path === targetNode.path)) {
-				list.push(targetNode);
-			}
-		} else {
-			portalTargetsBySource.set(edge.source, [targetNode]);
-		}
-	});
-
-	const buildLayoutNode = (
-		node: DtsNode,
-		depth: number,
-		portalSourcePath: string | null,
-		visited: Set<string>,
-	): LayoutNode => {
-		const branchVisited = new Set(visited);
-		branchVisited.add(node.path);
-
-		const layoutNode: LayoutNode = {
-			node,
-			depth,
-			x: 0,
-			y: 0,
-			angle: 0,
-			radius: depth * RADIAL_LAYER_GAP,
-			weight: 1,
-			portal: portalSourcePath !== null,
-			portalSourcePath,
-			children: [],
-		};
-
-		const realChildren = node.children.map((child) =>
-			buildLayoutNode(child, depth + 1, null, branchVisited),
-		);
-
-		const portalChildren: LayoutNode[] = [];
-		const portalTargets = portalTargetsBySource.get(node.path) ?? [];
-		portalTargets.forEach((target) => {
-			if (branchVisited.has(target.path)) {
-				return;
-			}
-			const portalVisited = new Set(branchVisited);
-			portalVisited.add(target.path);
-			const portalNode = buildLayoutNode(target, depth + 1, node.path, portalVisited);
-			portalNode.portal = true;
-			portalNode.portalSourcePath = node.path;
-			portalChildren.push(portalNode);
-		});
-
-		layoutNode.children = [...realChildren, ...portalChildren];
-		return layoutNode;
-	};
-
-	const rootLayout = buildLayoutNode(root, 0, null, new Set());
-
-	const computeWeights = (node: LayoutNode): number => {
-		if (!node.children.length) {
-			node.weight = 1;
-			return node.weight;
-		}
-		let total = 0;
-		node.children.forEach((child) => {
-			total += computeWeights(child);
-		});
-		node.weight = Math.max(total, 1);
-		return node.weight;
-	};
-
-	computeWeights(rootLayout);
-
-	const updatePosition = (node: LayoutNode) => {
-		node.x = node.radius * Math.cos(node.angle) - NODE_WIDTH / 2;
-		node.y = node.radius * Math.sin(node.angle);
-	};
-
-	const assignAngles = (node: LayoutNode, startAngle: number, endAngle: number) => {
-		if (node.depth === 0) {
-			node.angle = 0;
-		} else {
-			node.angle = (startAngle + endAngle) / 2;
-		}
-		node.radius = node.depth * RADIAL_LAYER_GAP;
-		updatePosition(node);
-
-		if (!node.children.length) {
-			return;
-		}
-
-		const span = endAngle - startAngle;
-		const childRadius = (node.depth + 1) * RADIAL_LAYER_GAP;
-		const minArc = childRadius > 0 ? (NODE_WIDTH + NODE_GAP) / childRadius : 0;
-		const gaps = Math.max(0, node.children.length - 1);
-		const minRequiredSpan = minArc * gaps;
-		let workingStart = startAngle;
-		let workingEnd = endAngle;
-		if (span < minRequiredSpan) {
-			const expansion = (minRequiredSpan - span) / 2;
-			workingStart -= expansion;
-			workingEnd += expansion;
-		}
-		const workingSpan = workingEnd - workingStart;
-		const availableSpan = Math.max(0, workingSpan - minRequiredSpan);
-		const total = node.children.reduce((sum, child) => sum + child.weight, 0);
-		const safeTotal = total === 0 ? node.children.length || 1 : total;
-		let cursor = workingStart;
-		node.children.forEach((child, index) => {
-			const portion = (child.weight || 1) / safeTotal;
-			const childSpan = availableSpan * portion;
-			const childStart = cursor;
-			const childEnd = childStart + childSpan;
-			assignAngles(child, childStart, childEnd);
-			cursor = childEnd + (index < node.children.length - 1 ? minArc : 0);
-		});
-	};
-
-	assignAngles(rootLayout, -Math.PI, Math.PI);
-
-		const resolveLayerOverlaps = (root: LayoutNode) => {
-			const layers = new Map<number, LayoutNode[]>();
-			const queue: LayoutNode[] = [root];
-			while (queue.length) {
-				const current = queue.pop()!;
-				const existing = layers.get(current.depth);
-				if (existing) {
-					existing.push(current);
-				} else {
-					layers.set(current.depth, [current]);
-				}
-				queue.push(...current.children);
-			}
-			layers.forEach((layer, depth) => {
-				if (depth === 0 || layer.length < 2) {
-					return;
-				}
-				const radius = depth * RADIAL_LAYER_GAP;
-				if (radius <= 0) {
-					return;
-				}
-				const marginX = NODE_GAP / 2;
-				const marginY = NODE_GAP / 2;
-				let sorted = [...layer].sort((a, b) => a.angle - b.angle);
-				const maxIterations = 12;
-				for (let iteration = 0; iteration < maxIterations; iteration += 1) {
-					let adjusted = false;
-					for (let index = 0; index < sorted.length - 1; index += 1) {
-						const current = sorted[index]!;
-						const next = sorted[index + 1]!;
-						const currentLeft = current.x - marginX;
-						const currentRight = current.x + NODE_WIDTH + marginX;
-						const currentTop = current.y - NODE_HEIGHT / 2 - marginY;
-						const currentBottom = current.y + NODE_HEIGHT / 2 + marginY;
-						const nextLeft = next.x - marginX;
-						const nextRight = next.x + NODE_WIDTH + marginX;
-						const nextTop = next.y - NODE_HEIGHT / 2 - marginY;
-						const nextBottom = next.y + NODE_HEIGHT / 2 + marginY;
-						const overlapsX = currentRight > nextLeft;
-						const overlapsY = currentBottom > nextTop && nextBottom > currentTop;
-						if (!overlapsX || !overlapsY) {
-							continue;
-						}
-						const overlap = currentRight - nextLeft;
-						const angleShift = overlap / radius;
-						current.angle -= angleShift / 2;
-						next.angle += angleShift / 2;
-						updatePosition(current);
-						updatePosition(next);
-						adjusted = true;
-					}
-					if (!adjusted) {
-						break;
-					}
-					sorted = [...layer].sort((a, b) => a.angle - b.angle);
-				}
-			});
-		};
-
-		resolveLayerOverlaps(rootLayout);
-
-	const nodes: LayoutNode[] = [];
-	const collectNodes = (node: LayoutNode) => {
-		nodes.push(node);
-		node.children.forEach(collectNodes);
-	};
-	collectNodes(rootLayout);
-
-	let minX = Infinity;
-	let maxX = -Infinity;
-	let minY = Infinity;
-	let maxY = -Infinity;
-
-	nodes.forEach((node) => {
-		minX = Math.min(minX, node.x);
-		maxX = Math.max(maxX, node.x + NODE_WIDTH);
-		minY = Math.min(minY, node.y - NODE_HEIGHT / 2);
-		maxY = Math.max(maxY, node.y + NODE_HEIGHT / 2);
-	});
-
-	if (!Number.isFinite(minX) || !Number.isFinite(maxX)) {
-		minX = -NODE_WIDTH / 2;
-		maxX = NODE_WIDTH / 2;
-	}
-	if (!Number.isFinite(minY) || !Number.isFinite(maxY)) {
-		minY = -NODE_HEIGHT / 2;
-		maxY = NODE_HEIGHT / 2;
-	}
-
-	const bounds = { minX, maxX, minY, maxY };
-	const width = Math.max(1, maxX - minX + CANVAS_PADDING * 2);
-	const height = Math.max(1, maxY - minY + CANVAS_PADDING * 2);
-	const offset = {
-		x: CANVAS_PADDING - minX,
-		y: CANVAS_PADDING - minY,
-	};
-
-	return {
-		root: rootLayout,
-		nodes,
-		bounds,
-		size: { width, height },
-		offset,
-	};
-};
+const buildLayout = (root: DtsNode): LayoutResult =>
+        radialLayout(root, {
+                referenceEdges,
+                endpointPaths,
+                nodeLookup: nodeByPath,
+        });
 
 const prepareCanvas = (width: number, height: number) => {
-	if (!canvas || !ctx) {
-		return;
-	}
+        if (!canvas || !ctx) {
+                return;
+        }
 
-	const ratio = window.devicePixelRatio ?? 1;
-	canvas.style.width = `${width}px`;
-	canvas.style.height = `${height}px`;
-	canvas.width = Math.max(Math.floor(width * ratio), 1);
-	canvas.height = Math.max(Math.floor(height * ratio), 1);
-	ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-	ctx.clearRect(0, 0, width, height);
+        const ratio = window.devicePixelRatio ?? 1;
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        canvas.width = Math.max(Math.floor(width * ratio), 1);
+        canvas.height = Math.max(Math.floor(height * ratio), 1);
+        ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+        ctx.clearRect(0, 0, width, height);
 };
 
-const computeCanvasMetrics = (layout: LayoutResult) => {
-	const baseWidth = layout.size.width;
-	const baseHeight = layout.size.height;
-	const wrapperWidth = viewerWrapper?.clientWidth ?? baseWidth;
-	const wrapperHeight = viewerWrapper?.clientHeight ?? baseHeight;
-	const width = Math.max(baseWidth, wrapperWidth);
-	const height = Math.max(baseHeight, wrapperHeight);
-	const extraX = Math.max(0, (width - baseWidth) / 2);
-	const extraY = Math.max(0, (height - baseHeight) / 2);
-	const baseTranslateX = layout.offset.x + extraX;
-	const baseTranslateY = layout.offset.y + extraY;
-	return {
-		width,
-		height,
-		translateX: baseTranslateX + viewOffset.x,
-		translateY: baseTranslateY + viewOffset.y,
-		baseTranslateX,
-		baseTranslateY,
-		extraX,
-		extraY,
-	};
+const computeFitScale = (layout: LayoutResult) => {
+        const wrapperWidth = viewerWrapper?.clientWidth ?? layout.size.width;
+        const wrapperHeight = viewerWrapper?.clientHeight ?? layout.size.height;
+        if (wrapperWidth <= 0 || wrapperHeight <= 0) {
+                return 1;
+        }
+        const scaleX = wrapperWidth / layout.size.width;
+        const scaleY = wrapperHeight / layout.size.height;
+        const scale = Math.min(scaleX, scaleY);
+        if (!Number.isFinite(scale) || scale <= 0) {
+                return 1;
+        }
+        return scale;
+};
+
+const fitViewToLayout = (
+        layout: LayoutResult,
+        options: { preserveExistingTransform?: boolean } = {},
+) => {
+        const { preserveExistingTransform = false } = options;
+        const previousAutoFit = lastAutoFitScale;
+        const fitScale = computeFitScale(layout);
+        minViewScale = Math.min(BASE_MIN_VIEW_SCALE, fitScale);
+        maxViewScale = fitScale;
+        lastAutoFitScale = fitScale;
+
+        if (preserveExistingTransform) {
+                const wasAtAutoFit =
+                        previousAutoFit !== null &&
+                        Math.abs(viewScale - previousAutoFit) < 1e-3 &&
+                        Math.abs(viewOffset.x) < 1e-3 &&
+                        Math.abs(viewOffset.y) < 1e-3;
+                if (wasAtAutoFit) {
+                        viewScale = fitScale;
+                        viewOffset = { x: 0, y: 0 };
+                        return;
+                }
+                const clampedScale = clamp(viewScale, minViewScale, maxViewScale);
+                if (Math.abs(clampedScale - viewScale) > 1e-6) {
+                        viewScale = clampedScale;
+                        viewOffset = { x: 0, y: 0 };
+                }
+                return;
+        }
+
+        viewScale = clamp(fitScale, minViewScale, maxViewScale);
+        viewOffset = { x: 0, y: 0 };
+};
+
+const computeCanvasMetrics = (layout: LayoutResult, scale = viewScale) => {
+        const scaledWidth = layout.size.width * scale;
+        const scaledHeight = layout.size.height * scale;
+        const wrapperWidth = viewerWrapper?.clientWidth ?? scaledWidth;
+        const wrapperHeight = viewerWrapper?.clientHeight ?? scaledHeight;
+        const width = Math.max(scaledWidth, wrapperWidth);
+        const height = Math.max(scaledHeight, wrapperHeight);
+        const extraX = Math.max(0, (width - scaledWidth) / 2);
+        const extraY = Math.max(0, (height - scaledHeight) / 2);
+        const baseTranslateX = layout.offset.x * scale + extraX;
+        const baseTranslateY = layout.offset.y * scale + extraY;
+        return {
+                width,
+                height,
+                translateX: baseTranslateX + viewOffset.x,
+                translateY: baseTranslateY + viewOffset.y,
+                baseTranslateX,
+                baseTranslateY,
+                extraX,
+                extraY,
+        };
 };
 
 const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
@@ -1099,26 +1159,30 @@ const displayTree = (source: string, origin: string) => {
 		return;
 	}
 
-	currentRoot = result.root;
-	currentLayout = layoutTree(result.root);
-	selectedNodePath = null;
-	selectedNode = null;
-	activeFilterRaw = "";
-	activeFilterNormalized = "";
-	rebuildNodeIndexes(currentRoot);
-	renderDetails(null);
-	if (canvas) {
-		canvas.style.cursor = "default";
-	}
-	filteredLayout = null;
-	filteredNodes = [];
-	forcedVisiblePaths.clear();
-	if (searchInput) {
-		searchInput.value = "";
-	}
-	viewOffset = { x: 0, y: 0 };
-	viewScale = 1;
-	applyFilters();
+        currentRoot = result.root;
+        currentLayout = buildLayout(result.root);
+        selectedNodePath = null;
+        selectedNode = null;
+        activeFilterRaw = "";
+        activeFilterNormalized = "";
+        rebuildNodeIndexes(currentRoot);
+        renderDetails(null);
+        if (canvas) {
+                canvas.style.cursor = "default";
+        }
+        filteredLayout = null;
+        filteredNodes = [];
+        forcedVisiblePaths.clear();
+        if (searchInput) {
+                searchInput.value = "";
+        }
+        viewOffset = { x: 0, y: 0 };
+        viewScale = 1;
+        minViewScale = BASE_MIN_VIEW_SCALE;
+        maxViewScale = BASE_MAX_VIEW_SCALE;
+        lastAutoFitScale = null;
+        shouldAutoFitView = true;
+        applyFilters();
 };
 
 const getLogicalPoint = (event: MouseEvent) => {
@@ -1175,10 +1239,11 @@ const selectLayoutNode = (layoutNode: LayoutNode) => {
 			}
 		});
 	}
-	if (shouldReapplyFilters) {
-		applyFilters();
-		return;
-	}
+        if (shouldReapplyFilters) {
+                shouldAutoFitView = true;
+                applyFilters();
+                return;
+        }
 	const layoutForSelection = filteredLayout ?? currentLayout;
 	if (layoutForSelection) {
 		renderLayout(layoutForSelection, selectedNodePath);
@@ -1334,7 +1399,7 @@ const buildFilteredLayout = (
 		return null;
 	}
 
-	return layoutTree(filteredRoot);
+        return buildLayout(filteredRoot);
 };
 
 const applyFilters = () => {
@@ -1392,35 +1457,49 @@ const applyFilters = () => {
 		}
 	}
 
-	const layoutForFilters = filteredLayout ?? (hasActiveFilters ? null : currentLayout);
-	if (layoutForFilters) {
-		renderLayout(layoutForFilters, selectedNodePath);
-	} else if (canvas && ctx) {
-		ctx.clearRect(0, 0, canvas.width, canvas.height);
-	}
+        const layoutForFilters = filteredLayout ?? (hasActiveFilters ? null : currentLayout);
+        if (layoutForFilters) {
+                if (shouldAutoFitView) {
+                        fitViewToLayout(layoutForFilters);
+                        shouldAutoFitView = false;
+                } else {
+                        fitViewToLayout(layoutForFilters, { preserveExistingTransform: true });
+                }
+                renderLayout(layoutForFilters, selectedNodePath);
+        } else if (canvas && ctx) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                minViewScale = BASE_MIN_VIEW_SCALE;
+                maxViewScale = BASE_MAX_VIEW_SCALE;
+                lastAutoFitScale = null;
+                viewOffset = { x: 0, y: 0 };
+                shouldAutoFitView = false;
+        }
 
 	const summaryCount = filteredLayout ? filteredNodes.length : 0;
 	updateSearchSummary(activeFilterRaw.trim(), summaryCount, activeStatusFilter);
 };
 
 const applySearch = (query: string) => {
-	const normalized = normalizeFilter(query);
-	if (normalized !== activeFilterNormalized) {
-		forcedVisiblePaths.clear();
-	}
-	activeFilterRaw = query;
-	activeFilterNormalized = normalized;
-	applyFilters();
+        const normalized = normalizeFilter(query);
+        const changed = normalized !== activeFilterNormalized || query !== activeFilterRaw;
+        if (changed) {
+                forcedVisiblePaths.clear();
+                shouldAutoFitView = true;
+        }
+        activeFilterRaw = query;
+        activeFilterNormalized = normalized;
+        applyFilters();
 };
 
 const clearSearch = () => {
-	activeFilterRaw = "";
-	activeFilterNormalized = "";
-	forcedVisiblePaths.clear();
-	if (searchInput) {
-		searchInput.value = "";
-	}
-	applyFilters();
+        activeFilterRaw = "";
+        activeFilterNormalized = "";
+        forcedVisiblePaths.clear();
+        if (searchInput) {
+                searchInput.value = "";
+        }
+        shouldAutoFitView = true;
+        applyFilters();
 };
 
 const handleFileSelection = async (file: File) => {
@@ -1467,12 +1546,13 @@ const attachEventHandlers = () => {
 		}
 	});
 
-	statusFilterSelect?.addEventListener("change", () => {
-		const value = statusFilterSelect.value;
-		activeStatusFilter = value === "disabled" ? "disabled" : value === "okay" ? "okay" : "all";
-		forcedVisiblePaths.clear();
-		applyFilters();
-	});
+        statusFilterSelect?.addEventListener("change", () => {
+                const value = statusFilterSelect.value;
+                activeStatusFilter = value === "disabled" ? "disabled" : value === "okay" ? "okay" : "all";
+                forcedVisiblePaths.clear();
+                shouldAutoFitView = true;
+                applyFilters();
+        });
 
 	if (canvas) {
 		const endPan = () => {
@@ -1509,24 +1589,26 @@ const attachEventHandlers = () => {
 				const pointerX = event.clientX - rect.left;
 				const pointerY = event.clientY - rect.top;
 				const metrics = computeCanvasMetrics(layout);
-				const worldX = (pointerX - metrics.translateX) / viewScale;
-				const worldY = (pointerY - metrics.translateY) / viewScale;
-				const zoomFactor = Math.exp(-event.deltaY * ZOOM_SENSITIVITY);
-				const nextScale = clamp(viewScale * zoomFactor, MIN_VIEW_SCALE, MAX_VIEW_SCALE);
-				if (nextScale === viewScale) {
-					return;
-				}
-				const newTranslateX = pointerX - worldX * nextScale;
-				const newTranslateY = pointerY - worldY * nextScale;
-				viewOffset = {
-					x: newTranslateX - metrics.baseTranslateX,
-					y: newTranslateY - metrics.baseTranslateY,
-				};
-				viewScale = nextScale;
-				const activeLayout = filteredLayout ?? currentLayout;
-				if (activeLayout) {
-					renderLayout(activeLayout, selectedNodePath);
-				}
+                                const worldX = (pointerX - metrics.translateX) / viewScale;
+                                const worldY = (pointerY - metrics.translateY) / viewScale;
+                                const zoomFactor = Math.exp(-event.deltaY * ZOOM_SENSITIVITY);
+                                const nextScale = clamp(viewScale * zoomFactor, minViewScale, maxViewScale);
+                                if (nextScale === viewScale) {
+                                        return;
+                                }
+                                const nextMetrics = computeCanvasMetrics(layout, nextScale);
+                                const newTranslateX = pointerX - worldX * nextScale;
+                                const newTranslateY = pointerY - worldY * nextScale;
+                                viewOffset = {
+                                        x: newTranslateX - nextMetrics.baseTranslateX,
+                                        y: newTranslateY - nextMetrics.baseTranslateY,
+                                };
+                                viewScale = nextScale;
+                                shouldAutoFitView = false;
+                                const activeLayout = filteredLayout ?? currentLayout;
+                                if (activeLayout) {
+                                        renderLayout(activeLayout, selectedNodePath);
+                                }
 			},
 			{ passive: false },
 		);
@@ -1619,9 +1701,18 @@ const attachEventHandlers = () => {
 		clearSearch();
 	});
 
-	const dragState = {
-		enterDepth: 0,
-	};
+        window.addEventListener("resize", () => {
+                const layout = filteredLayout ?? currentLayout;
+                if (!layout) {
+                        return;
+                }
+                fitViewToLayout(layout, { preserveExistingTransform: true });
+                renderLayout(layout, selectedNodePath);
+        });
+
+        const dragState = {
+                enterDepth: 0,
+        };
 
 	const hasFiles = (event: DragEvent) =>
 		Array.from(event.dataTransfer?.types ?? []).includes("Files");
