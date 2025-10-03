@@ -6,13 +6,20 @@ type LayoutNode = {
 	depth: number;
 	x: number;
 	y: number;
+	angle: number;
+	radius: number;
+	weight: number;
+	portal: boolean;
+	portalSourcePath: string | null;
 	children: LayoutNode[];
 };
 
-const HORIZONTAL_SPACING = 220;
-const VERTICAL_SPACING = 96;
+type StatusFilter = "all" | "okay" | "disabled";
+
+const RADIAL_LAYER_GAP = 220;
 const NODE_WIDTH = 180;
 const NODE_HEIGHT = 48;
+const NODE_GAP = 24;
 const CANVAS_PADDING = 48;
 
 const fileInput = document.querySelector<HTMLInputElement>("#dts-input");
@@ -20,12 +27,14 @@ const sampleButton = document.querySelector<HTMLButtonElement>("#load-sample");
 const statusElement = document.querySelector<HTMLParagraphElement>("#status");
 const canvas = document.querySelector<HTMLCanvasElement>("#viewer-canvas");
 const dropOverlay = document.querySelector<HTMLDivElement>("#drop-overlay");
+const viewerWrapper = document.querySelector<HTMLDivElement>("#viewer-wrapper");
 const detailsTitle = document.querySelector<HTMLHeadingElement>("#details-title");
 const detailsContent = document.querySelector<HTMLDivElement>("#details-content");
 const searchForm = document.querySelector<HTMLFormElement>("#search-form");
 const searchInput = document.querySelector<HTMLInputElement>("#search-input");
 const searchClear = document.querySelector<HTMLButtonElement>("#search-clear");
 const searchSummary = document.querySelector<HTMLParagraphElement>("#search-summary");
+const statusFilterSelect = document.querySelector<HTMLSelectElement>("#status-filter");
 const warningsToggle = document.querySelector<HTMLInputElement>("#warnings-checkbox");
 const warningsToggleLabel = document.querySelector<HTMLLabelElement>("#warnings-toggle-label");
 const warningsPanel = document.querySelector<HTMLPreElement>("#warnings-panel");
@@ -80,9 +89,20 @@ const SAMPLE_DTS = `
 type LayoutResult = {
 	root: LayoutNode;
 	nodes: LayoutNode[];
-	maxDepth: number;
-	maxY: number;
-	rowCount: number;
+	bounds: {
+		minX: number;
+		maxX: number;
+		minY: number;
+		maxY: number;
+	};
+	size: {
+		width: number;
+		height: number;
+	};
+	offset: {
+		x: number;
+		y: number;
+	};
 };
 
 let currentLayout: LayoutResult | null = null;
@@ -91,8 +111,23 @@ let selectedNodePath: string | null = null;
 let selectedNode: DtsNode | null = null;
 let activeFilterRaw = "";
 let activeFilterNormalized = "";
+let activeStatusFilter: StatusFilter = "all";
 let filteredLayout: LayoutResult | null = null;
 let filteredNodes: LayoutNode[] = [];
+let viewOffset = { x: 0, y: 0 };
+let viewScale = 1;
+const MIN_VIEW_SCALE = 0.3;
+const MAX_VIEW_SCALE = 3.2;
+const ZOOM_SENSITIVITY = 0.002;
+let isPanning = false;
+let panPointerId: number | null = null;
+let panStart = { x: 0, y: 0 };
+let panOrigin = { x: 0, y: 0 };
+
+if (statusFilterSelect) {
+	const defaultValue = statusFilterSelect.value;
+	activeStatusFilter = defaultValue === "disabled" ? "disabled" : defaultValue === "okay" ? "okay" : "all";
+}
 let currentWarnings: string[] = [];
 let lastStatus: {
 	origin: string;
@@ -103,6 +138,14 @@ let lastStatus: {
 const nodeByPath = new Map<string, DtsNode>();
 const nodeByLabel = new Map<string, DtsNode>();
 const nodeByPhandle = new Map<number, DtsNode>();
+// Paths of nodes considered "endpoints" – highlighted in the tree.
+// This includes nodes literally named 'endpoint' and any nodes referenced via
+// remote-endpoint / remote-endpoints properties (and the nodes containing those properties).
+const endpointPaths = new Set<string>();
+// Reference edges (phandle or label references) collected from properties.
+type ReferenceEdge = { source: string; target: string; viaProperty: string; kind: "phandle" | "label" };
+let referenceEdges: ReferenceEdge[] = [];
+const forcedVisiblePaths = new Set<string>();
 const HANDLE_PROPERTY_NAMES = new Set([
 	"phandle",
 	"linux,phandle",
@@ -136,14 +179,55 @@ const collectNumbersFromValue = (value: DtsValue): number[] => {
 	return collected;
 };
 
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+const getParentPath = (path: string): string | null => {
+	if (!path || path === "/") {
+		return null;
+	}
+	const trimmed = path.endsWith("/") && path !== "/"
+		? path.replace(/\/+$/, "")
+		: path;
+	const index = trimmed.lastIndexOf("/");
+	if (index <= 0) {
+		return "/";
+	}
+	const parent = trimmed.slice(0, index);
+	return parent ? parent : "/";
+};
+
+const ensureForcedVisibility = (path: string): boolean => {
+	if (!nodeByPath.has(path)) {
+		return false;
+	}
+	let changed = false;
+	let current: string | null = path;
+	while (current) {
+		if (!forcedVisiblePaths.has(current)) {
+			forcedVisiblePaths.add(current);
+			changed = true;
+		}
+		if (current === "/") {
+			break;
+		}
+		current = getParentPath(current);
+	}
+	return changed;
+};
+
 const rebuildNodeIndexes = (root: DtsNode | null) => {
 	nodeByPath.clear();
 	nodeByLabel.clear();
 	nodeByPhandle.clear();
+	endpointPaths.clear();
+	referenceEdges = [];
 
 	if (!root) {
 		return;
 	}
+
+	// Collect all nodes for a second pass (needed so phandle references are fully populated)
+	const allNodes: DtsNode[] = [];
 
 	const visit = (node: DtsNode) => {
 		nodeByPath.set(node.path, node);
@@ -160,9 +244,120 @@ const rebuildNodeIndexes = (root: DtsNode | null) => {
 		});
 
 		node.children.forEach(visit);
+		allNodes.push(node);
 	};
 
 	visit(root);
+
+	const REMOTE_NAMES = new Set(["remote-endpoint", "remote-endpoints"]);
+	const visitLabelRefs = (value: unknown, onLabel: (label: string) => void) => {
+		if (Array.isArray(value)) {
+			value.forEach((entry) => visitLabelRefs(entry, onLabel));
+			return;
+		}
+		if (value && typeof value === "object" && "ref" in value) {
+			const label = (value as { ref?: unknown }).ref;
+			if (typeof label === "string") {
+				onLabel(label);
+			}
+		}
+	};
+
+	// Second pass: determine endpoint nodes.
+	// Heuristics:
+	// 1. Node whose fullName is exactly 'endpoint'.
+	// 2. Nodes that declare remote-endpoint(s) properties.
+	// 3. Targets referenced by those remote-endpoint(s) properties (via phandle numbers or labels).
+	allNodes.forEach((node) => {
+		if (node.fullName === "endpoint") {
+			endpointPaths.add(node.path);
+		}
+		node.properties.forEach((prop) => {
+			if (!REMOTE_NAMES.has(prop.name)) {
+				return;
+			}
+			// Mark the node containing the property
+			endpointPaths.add(node.path);
+			collectNumbersFromValue(prop.value).forEach((handle) => {
+				const target = nodeByPhandle.get(handle);
+				if (target) {
+					endpointPaths.add(target.path);
+				}
+			});
+			visitLabelRefs(prop.value as unknown, (label) => {
+				const target = nodeByLabel.get(label);
+				if (target) {
+					endpointPaths.add(target.path);
+				}
+			});
+		});
+	});
+
+	// Build reference edges exclusively for remote-endpoint links.
+	const edgeDedup = new Set<string>();
+	const undirectedSeen = new Set<string>();
+	const tryAdd = (edge: ReferenceEdge) => {
+		if (edge.source === edge.target) {
+			return;
+		}
+		if (!endpointPaths.has(edge.target)) {
+			return;
+		}
+		const undirectedKey = edge.source < edge.target
+			? `${edge.source}|${edge.target}`
+			: `${edge.target}|${edge.source}`;
+		if (undirectedSeen.has(undirectedKey)) {
+			return;
+		}
+		const key = `${edge.source}|${edge.target}|${edge.viaProperty}`;
+		if (edgeDedup.has(key)) {
+			return;
+		}
+		edgeDedup.add(key);
+		undirectedSeen.add(undirectedKey);
+		referenceEdges.push(edge);
+	};
+
+	allNodes.forEach((node) => {
+		node.properties.forEach((prop) => {
+			if (!REMOTE_NAMES.has(prop.name)) {
+				return;
+			}
+			const visitVal = (val: unknown) => {
+				if (Array.isArray(val)) {
+					val.forEach(visitVal);
+					return;
+				}
+				if (val && typeof val === "object") {
+					if ("ref" in val && typeof (val as { ref?: unknown }).ref === "string") {
+						const label = (val as { ref: string }).ref;
+						const target = nodeByLabel.get(label);
+						if (target) {
+							tryAdd({
+								source: node.path,
+								target: target.path,
+								viaProperty: prop.name,
+								kind: "label",
+							});
+						}
+					}
+					return;
+				}
+				if (typeof val === "number" && Number.isFinite(val)) {
+					const target = nodeByPhandle.get(val);
+					if (target) {
+						tryAdd({
+							source: node.path,
+							target: target.path,
+							viaProperty: prop.name,
+							kind: "phandle",
+						});
+					}
+				}
+			};
+			visitVal(prop.value as unknown);
+		});
+	});
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -223,6 +418,21 @@ const findLayoutNodeByPath = (path: string, layout: LayoutResult | null): Layout
 		return null;
 	}
 	return layout.nodes.find((node) => node.node.path === path) ?? null;
+};
+
+const getConnectedEndpointPaths = (path: string): string[] => {
+	const results = new Set<string>();
+	referenceEdges.forEach((edge) => {
+		if (edge.source === path) {
+			results.add(edge.target);
+			return;
+		}
+		if (edge.target === path) {
+			results.add(edge.source);
+		}
+	});
+	results.delete(path);
+	return [...results];
 };
 
 const focusNodeByPath = (path: string) => {
@@ -441,49 +651,237 @@ const updateStatus = (
 };
 
 const layoutTree = (root: DtsNode): LayoutResult => {
-	const nextRow = { value: 0 };
+	const portalTargetsBySource = new Map<string, DtsNode[]>();
 
-	const layoutNode = (node: DtsNode, depth: number): LayoutNode => {
-		const base: LayoutNode = {
+	referenceEdges.forEach((edge) => {
+		const targetNode = nodeByPath.get(edge.target);
+		if (!targetNode) {
+			return;
+		}
+		if (!endpointPaths.has(targetNode.path)) {
+			return;
+		}
+		const list = portalTargetsBySource.get(edge.source);
+		if (list) {
+			if (!list.some((entry) => entry.path === targetNode.path)) {
+				list.push(targetNode);
+			}
+		} else {
+			portalTargetsBySource.set(edge.source, [targetNode]);
+		}
+	});
+
+	const buildLayoutNode = (
+		node: DtsNode,
+		depth: number,
+		portalSourcePath: string | null,
+		visited: Set<string>,
+	): LayoutNode => {
+		const branchVisited = new Set(visited);
+		branchVisited.add(node.path);
+
+		const layoutNode: LayoutNode = {
 			node,
 			depth,
-			x: depth * HORIZONTAL_SPACING,
+			x: 0,
 			y: 0,
+			angle: 0,
+			radius: depth * RADIAL_LAYER_GAP,
+			weight: 1,
+			portal: portalSourcePath !== null,
+			portalSourcePath,
 			children: [],
 		};
 
-		const children = node.children.map((child) => layoutNode(child, depth + 1));
-		base.children = children;
+		const realChildren = node.children.map((child) =>
+			buildLayoutNode(child, depth + 1, null, branchVisited),
+		);
 
-		if (children.length === 0) {
-			base.y = nextRow.value * VERTICAL_SPACING + NODE_HEIGHT / 2;
-			nextRow.value += 1;
+		const portalChildren: LayoutNode[] = [];
+		const portalTargets = portalTargetsBySource.get(node.path) ?? [];
+		portalTargets.forEach((target) => {
+			if (branchVisited.has(target.path)) {
+				return;
+			}
+			const portalVisited = new Set(branchVisited);
+			portalVisited.add(target.path);
+			const portalNode = buildLayoutNode(target, depth + 1, node.path, portalVisited);
+			portalNode.portal = true;
+			portalNode.portalSourcePath = node.path;
+			portalChildren.push(portalNode);
+		});
+
+		layoutNode.children = [...realChildren, ...portalChildren];
+		return layoutNode;
+	};
+
+	const rootLayout = buildLayoutNode(root, 0, null, new Set());
+
+	const computeWeights = (node: LayoutNode): number => {
+		if (!node.children.length) {
+			node.weight = 1;
+			return node.weight;
+		}
+		let total = 0;
+		node.children.forEach((child) => {
+			total += computeWeights(child);
+		});
+		node.weight = Math.max(total, 1);
+		return node.weight;
+	};
+
+	computeWeights(rootLayout);
+
+	const updatePosition = (node: LayoutNode) => {
+		node.x = node.radius * Math.cos(node.angle) - NODE_WIDTH / 2;
+		node.y = node.radius * Math.sin(node.angle);
+	};
+
+	const assignAngles = (node: LayoutNode, startAngle: number, endAngle: number) => {
+		if (node.depth === 0) {
+			node.angle = 0;
 		} else {
-			const first = children[0]!;
-			const last = children[children.length - 1]!;
-			base.y = (first.y + last.y) / 2;
+			node.angle = (startAngle + endAngle) / 2;
+		}
+		node.radius = node.depth * RADIAL_LAYER_GAP;
+		updatePosition(node);
+
+		if (!node.children.length) {
+			return;
 		}
 
-		return base;
+		const span = endAngle - startAngle;
+		const childRadius = (node.depth + 1) * RADIAL_LAYER_GAP;
+		const minArc = childRadius > 0 ? (NODE_WIDTH + NODE_GAP) / childRadius : 0;
+		const gaps = Math.max(0, node.children.length - 1);
+		const minRequiredSpan = minArc * gaps;
+		let workingStart = startAngle;
+		let workingEnd = endAngle;
+		if (span < minRequiredSpan) {
+			const expansion = (minRequiredSpan - span) / 2;
+			workingStart -= expansion;
+			workingEnd += expansion;
+		}
+		const workingSpan = workingEnd - workingStart;
+		const availableSpan = Math.max(0, workingSpan - minRequiredSpan);
+		const total = node.children.reduce((sum, child) => sum + child.weight, 0);
+		const safeTotal = total === 0 ? node.children.length || 1 : total;
+		let cursor = workingStart;
+		node.children.forEach((child, index) => {
+			const portion = (child.weight || 1) / safeTotal;
+			const childSpan = availableSpan * portion;
+			const childStart = cursor;
+			const childEnd = childStart + childSpan;
+			assignAngles(child, childStart, childEnd);
+			cursor = childEnd + (index < node.children.length - 1 ? minArc : 0);
+		});
 	};
 
-	const rootLayout = layoutNode(root, 0);
-	const ordered: LayoutNode[] = [];
-	const collect = (node: LayoutNode) => {
-		ordered.push(node);
-		node.children.forEach(collect);
-	};
-	collect(rootLayout);
+	assignAngles(rootLayout, -Math.PI, Math.PI);
 
-	const maxDepth = ordered.reduce((acc, item) => Math.max(acc, item.depth), 0);
-	const maxY = ordered.reduce((acc, item) => Math.max(acc, item.y), NODE_HEIGHT);
+		const resolveLayerOverlaps = (root: LayoutNode) => {
+			const layers = new Map<number, LayoutNode[]>();
+			const queue: LayoutNode[] = [root];
+			while (queue.length) {
+				const current = queue.pop()!;
+				const existing = layers.get(current.depth);
+				if (existing) {
+					existing.push(current);
+				} else {
+					layers.set(current.depth, [current]);
+				}
+				queue.push(...current.children);
+			}
+			layers.forEach((layer, depth) => {
+				if (depth === 0 || layer.length < 2) {
+					return;
+				}
+				const radius = depth * RADIAL_LAYER_GAP;
+				if (radius <= 0) {
+					return;
+				}
+				const marginX = NODE_GAP / 2;
+				const marginY = NODE_GAP / 2;
+				let sorted = [...layer].sort((a, b) => a.angle - b.angle);
+				const maxIterations = 12;
+				for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+					let adjusted = false;
+					for (let index = 0; index < sorted.length - 1; index += 1) {
+						const current = sorted[index]!;
+						const next = sorted[index + 1]!;
+						const currentLeft = current.x - marginX;
+						const currentRight = current.x + NODE_WIDTH + marginX;
+						const currentTop = current.y - NODE_HEIGHT / 2 - marginY;
+						const currentBottom = current.y + NODE_HEIGHT / 2 + marginY;
+						const nextLeft = next.x - marginX;
+						const nextRight = next.x + NODE_WIDTH + marginX;
+						const nextTop = next.y - NODE_HEIGHT / 2 - marginY;
+						const nextBottom = next.y + NODE_HEIGHT / 2 + marginY;
+						const overlapsX = currentRight > nextLeft;
+						const overlapsY = currentBottom > nextTop && nextBottom > currentTop;
+						if (!overlapsX || !overlapsY) {
+							continue;
+						}
+						const overlap = currentRight - nextLeft;
+						const angleShift = overlap / radius;
+						current.angle -= angleShift / 2;
+						next.angle += angleShift / 2;
+						updatePosition(current);
+						updatePosition(next);
+						adjusted = true;
+					}
+					if (!adjusted) {
+						break;
+					}
+					sorted = [...layer].sort((a, b) => a.angle - b.angle);
+				}
+			});
+		};
+
+		resolveLayerOverlaps(rootLayout);
+
+	const nodes: LayoutNode[] = [];
+	const collectNodes = (node: LayoutNode) => {
+		nodes.push(node);
+		node.children.forEach(collectNodes);
+	};
+	collectNodes(rootLayout);
+
+	let minX = Infinity;
+	let maxX = -Infinity;
+	let minY = Infinity;
+	let maxY = -Infinity;
+
+	nodes.forEach((node) => {
+		minX = Math.min(minX, node.x);
+		maxX = Math.max(maxX, node.x + NODE_WIDTH);
+		minY = Math.min(minY, node.y - NODE_HEIGHT / 2);
+		maxY = Math.max(maxY, node.y + NODE_HEIGHT / 2);
+	});
+
+	if (!Number.isFinite(minX) || !Number.isFinite(maxX)) {
+		minX = -NODE_WIDTH / 2;
+		maxX = NODE_WIDTH / 2;
+	}
+	if (!Number.isFinite(minY) || !Number.isFinite(maxY)) {
+		minY = -NODE_HEIGHT / 2;
+		maxY = NODE_HEIGHT / 2;
+	}
+
+	const bounds = { minX, maxX, minY, maxY };
+	const width = Math.max(1, maxX - minX + CANVAS_PADDING * 2);
+	const height = Math.max(1, maxY - minY + CANVAS_PADDING * 2);
+	const offset = {
+		x: CANVAS_PADDING - minX,
+		y: CANVAS_PADDING - minY,
+	};
 
 	return {
 		root: rootLayout,
-		nodes: ordered,
-		maxDepth,
-		maxY,
-		rowCount: Math.max(nextRow.value, 1),
+		nodes,
+		bounds,
+		size: { width, height },
+		offset,
 	};
 };
 
@@ -499,7 +897,29 @@ const prepareCanvas = (width: number, height: number) => {
 	canvas.height = Math.max(Math.floor(height * ratio), 1);
 	ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
 	ctx.clearRect(0, 0, width, height);
-	ctx.translate(CANVAS_PADDING, CANVAS_PADDING);
+};
+
+const computeCanvasMetrics = (layout: LayoutResult) => {
+	const baseWidth = layout.size.width;
+	const baseHeight = layout.size.height;
+	const wrapperWidth = viewerWrapper?.clientWidth ?? baseWidth;
+	const wrapperHeight = viewerWrapper?.clientHeight ?? baseHeight;
+	const width = Math.max(baseWidth, wrapperWidth);
+	const height = Math.max(baseHeight, wrapperHeight);
+	const extraX = Math.max(0, (width - baseWidth) / 2);
+	const extraY = Math.max(0, (height - baseHeight) / 2);
+	const baseTranslateX = layout.offset.x + extraX;
+	const baseTranslateY = layout.offset.y + extraY;
+	return {
+		width,
+		height,
+		translateX: baseTranslateX + viewOffset.x,
+		translateY: baseTranslateY + viewOffset.y,
+		baseTranslateX,
+		baseTranslateY,
+		extraX,
+		extraY,
+	};
 };
 
 const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
@@ -507,61 +927,154 @@ const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
 		return;
 	}
 
-	const width = (layout.maxDepth + 1) * HORIZONTAL_SPACING + NODE_WIDTH + CANVAS_PADDING * 2;
-	const height = layout.maxY + NODE_HEIGHT / 2 + CANVAS_PADDING * 2;
+	const metrics = computeCanvasMetrics(layout);
 
-	prepareCanvas(width, height);
+	prepareCanvas(metrics.width, metrics.height);
 
 	ctx.save();
-	ctx.lineWidth = 1.4;
-	ctx.strokeStyle = "rgba(80, 80, 90, 0.6)";
+	ctx.translate(metrics.translateX, metrics.translateY);
+	ctx.scale(viewScale, viewScale);
 
+	// Tree edges
+	ctx.save();
 	layout.nodes.forEach((node) => {
 		const parentCenterX = node.x + NODE_WIDTH / 2;
 		const parentCenterY = node.y;
 		node.children.forEach((child) => {
 			const childCenterX = child.x + NODE_WIDTH / 2;
 			const childCenterY = child.y;
-
 			ctx.beginPath();
+			if (child.portal) {
+				ctx.setLineDash([4, 6]);
+				ctx.strokeStyle = "rgba(217, 119, 6, 0.45)";
+				ctx.lineWidth = 1.3;
+			} else {
+				ctx.setLineDash([]);
+				ctx.strokeStyle = "rgba(80, 80, 90, 0.55)";
+				ctx.lineWidth = 1.4;
+			}
 			ctx.moveTo(parentCenterX, parentCenterY);
 			ctx.lineTo(childCenterX, childCenterY);
 			ctx.stroke();
 		});
 	});
-
 	ctx.restore();
 
+	// Reference edges (draw after tree edges, before nodes)
+	ctx.save();
+	const layoutNodesByPath = new Map<string, LayoutNode[]>();
+	layout.nodes.forEach((ln) => {
+		const list = layoutNodesByPath.get(ln.node.path);
+		if (list) {
+			list.push(ln);
+		} else {
+			layoutNodesByPath.set(ln.node.path, [ln]);
+		}
+	});
+
+	const pickRepresentative = (nodes: LayoutNode[] | undefined) => {
+		if (!nodes || nodes.length === 0) {
+			return null;
+		}
+		return nodes.find((candidate) => !candidate.portal) ?? nodes[0] ?? null;
+	};
+
+	referenceEdges.forEach((edge) => {
+		const sourceNode = pickRepresentative(layoutNodesByPath.get(edge.source));
+		const targetNode = pickRepresentative(layoutNodesByPath.get(edge.target));
+		if (!sourceNode || !targetNode) {
+			return;
+		}
+		const fromX = sourceNode.x + NODE_WIDTH / 2;
+		const fromY = sourceNode.y;
+		const toX = targetNode.x + NODE_WIDTH / 2;
+		const toY = targetNode.y;
+		const midX = (fromX + toX) / 2;
+		const midY = (fromY + toY) / 2;
+		const offsetY = Math.abs(toX - fromX) < 1 ? 60 : 40;
+		const ctrlX = midX;
+		const ctrlY = midY - offsetY;
+		const touchesSelection = selectedPath === edge.source || selectedPath === edge.target;
+		ctx.beginPath();
+		ctx.setLineDash(touchesSelection ? [5, 5] : [8, 6]);
+		ctx.lineWidth = touchesSelection ? 1.8 : 1.2;
+		ctx.strokeStyle = edge.kind === "label"
+			? (touchesSelection ? "rgba(147, 51, 234, 0.9)" : "rgba(168, 85, 247, 0.45)")
+			: (touchesSelection ? "rgba(2, 132, 199, 0.9)" : "rgba(14, 165, 233, 0.45)");
+		ctx.moveTo(fromX, fromY);
+		ctx.quadraticCurveTo(ctrlX, ctrlY, toX, toY);
+		ctx.stroke();
+	});
+	ctx.restore();
+
+	// Nodes
 	ctx.save();
 	ctx.font = "14px 'Segoe UI', system-ui, sans-serif";
 	ctx.textBaseline = "middle";
 	ctx.textAlign = "left";
 
 	layout.nodes.forEach((node) => {
-		const x = node.x;
-		const y = node.y - NODE_HEIGHT / 2;
+		const left = node.x;
+		const top = node.y - NODE_HEIGHT / 2;
 		const isSelected = selectedPath === node.node.path;
+		const isEndpoint = endpointPaths.has(node.node.path);
+		const isPortal = node.portal;
 
-		ctx.fillStyle = isSelected ? "rgba(59, 130, 246, 0.92)" : "rgba(255, 255, 255, 0.94)";
-		ctx.strokeStyle = isSelected ? "rgba(29, 78, 216, 0.95)" : "rgba(60, 60, 70, 0.8)";
-		ctx.lineWidth = isSelected ? 2 : 1.2;
+		if (isSelected) {
+			ctx.setLineDash([]);
+			ctx.fillStyle = "rgba(59, 130, 246, 0.92)";
+			ctx.strokeStyle = "rgba(29, 78, 216, 0.95)";
+			ctx.lineWidth = 2.2;
+		} else if (isPortal && isEndpoint) {
+			ctx.setLineDash([3, 3]);
+			ctx.fillStyle = "rgba(224, 242, 254, 0.9)";
+			ctx.strokeStyle = "rgba(2, 132, 199, 0.9)";
+			ctx.lineWidth = 1.6;
+		} else if (isPortal) {
+			ctx.setLineDash([3, 3]);
+			ctx.fillStyle = "rgba(254, 243, 199, 0.9)";
+			ctx.strokeStyle = "rgba(217, 119, 6, 0.9)";
+			ctx.lineWidth = 1.5;
+		} else if (isEndpoint) {
+			ctx.setLineDash([]);
+			ctx.fillStyle = "rgba(191, 219, 254, 0.85)";
+			ctx.strokeStyle = "rgba(96, 165, 250, 0.9)";
+			ctx.lineWidth = 1.4;
+		} else {
+			ctx.setLineDash([]);
+			ctx.fillStyle = "rgba(255, 255, 255, 0.94)";
+			ctx.strokeStyle = "rgba(60, 60, 70, 0.8)";
+			ctx.lineWidth = 1.2;
+		}
 		ctx.beginPath();
-		ctx.roundRect(x, y, NODE_WIDTH, NODE_HEIGHT, 10);
+		ctx.roundRect(left, top, NODE_WIDTH, NODE_HEIGHT, 10);
 		ctx.fill();
 		ctx.stroke();
+		ctx.setLineDash([]);
 
-		const label = node.node.label
+		const labelText = node.node.label
 			? `${node.node.label}: ${node.node.fullName}`
 			: node.node.fullName;
-		const subtitle = `children: ${node.node.children.length}  props: ${node.node.properties.length}`;
+		const details: string[] = [
+			`children: ${node.node.children.length}`,
+			`props: ${node.node.properties.length}`,
+		];
+		if (isPortal) {
+			details.push("portal");
+		}
+		if (isEndpoint) {
+			details.push("endpoint");
+		}
+		const subtitle = details.join(" · ");
 
-		ctx.fillStyle = isSelected ? "#f8fafc" : "#111827";
-		ctx.fillText(truncate(label, 28), x + 12, node.y - 10);
+		ctx.fillStyle = isSelected ? "#f8fafc" : isPortal ? "#78350f" : isEndpoint ? "#0f172a" : "#111827";
+		ctx.fillText(truncate(labelText, 28), left + 12, node.y - 10);
 
-		ctx.fillStyle = isSelected ? "#e5e7eb" : "#4b5563";
-		ctx.fillText(truncate(subtitle, 30), x + 12, node.y + 10);
+		ctx.fillStyle = isSelected ? "#e5e7eb" : isPortal ? "#92400e" : isEndpoint ? "#1e3a8a" : "#4b5563";
+		ctx.fillText(truncate(subtitle, 32), left + 12, node.y + 10);
 	});
 
+	ctx.restore();
 	ctx.restore();
 };
 
@@ -599,20 +1112,27 @@ const displayTree = (source: string, origin: string) => {
 	}
 	filteredLayout = null;
 	filteredNodes = [];
+	forcedVisiblePaths.clear();
 	if (searchInput) {
 		searchInput.value = "";
 	}
-	updateSearchSummary("", 0);
-	renderLayout(currentLayout, selectedNodePath);
+	viewOffset = { x: 0, y: 0 };
+	viewScale = 1;
+	applyFilters();
 };
 
 const getLogicalPoint = (event: MouseEvent) => {
 	if (!canvas) {
 		return null;
 	}
+	const layout = filteredLayout ?? currentLayout;
+	if (!layout) {
+		return null;
+	}
+	const metrics = computeCanvasMetrics(layout);
 	const rect = canvas.getBoundingClientRect();
-	const x = event.clientX - rect.left - CANVAS_PADDING;
-	const y = event.clientY - rect.top - CANVAS_PADDING;
+	const x = (event.clientX - rect.left - metrics.translateX) / viewScale;
+	const y = (event.clientY - rect.top - metrics.translateY) / viewScale;
 	return { x, y };
 };
 
@@ -637,9 +1157,6 @@ const pickNodeFromEvent = (event: MouseEvent): LayoutNode | null => {
 	if (!point) {
 		return null;
 	}
-	if (point.x < 0 || point.y < 0) {
-		return null;
-	}
 	return pickNodeAt(point.x, point.y);
 };
 
@@ -647,26 +1164,63 @@ const selectLayoutNode = (layoutNode: LayoutNode) => {
 	selectedNodePath = layoutNode.node.path;
 	selectedNode = nodeByPath.get(selectedNodePath) ?? layoutNode.node;
 	renderDetails(selectedNode);
-	const layoutToRender = filteredLayout ?? currentLayout;
-	if (layoutToRender) {
-		renderLayout(layoutToRender, selectedNodePath);
+	let shouldReapplyFilters = false;
+	if (filteredLayout && endpointPaths.has(layoutNode.node.path)) {
+		const connected = getConnectedEndpointPaths(layoutNode.node.path);
+		connected.forEach((path) => {
+			if (!filteredNodes.some((entry) => entry.node.path === path)) {
+				if (ensureForcedVisibility(path)) {
+					shouldReapplyFilters = true;
+				}
+			}
+		});
+	}
+	if (shouldReapplyFilters) {
+		applyFilters();
+		return;
+	}
+	const layoutForSelection = filteredLayout ?? currentLayout;
+	if (layoutForSelection) {
+		renderLayout(layoutForSelection, selectedNodePath);
 	}
 };
 
-const updateSearchSummary = (query: string, matchCount: number) => {
+const updateSearchSummary = (query: string, matchCount: number, statusFilter: StatusFilter) => {
 	if (!searchSummary) {
 		return;
 	}
-	if (!query) {
+	const hasQuery = Boolean(query);
+	const hasStatusFilter = statusFilter !== "all";
+	if (!hasQuery && !hasStatusFilter) {
 		searchSummary.textContent = "";
 		return;
 	}
+
 	if (matchCount === 0) {
-		searchSummary.textContent = `No matches for "${query}"`;
+		if (hasQuery && hasStatusFilter) {
+			searchSummary.textContent = `No matches for "${query}" (status: ${statusFilter})`;
+			return;
+		}
+		if (hasQuery) {
+			searchSummary.textContent = `No matches for "${query}"`;
+			return;
+		}
+		searchSummary.textContent = `No nodes with status ${statusFilter}`;
 		return;
 	}
-	const suffix = matchCount === 1 ? "match" : "matches";
-	searchSummary.textContent = `${matchCount} ${suffix}`;
+
+	const segments: string[] = [];
+	if (hasQuery) {
+		const suffix = matchCount === 1 ? "match" : "matches";
+		segments.push(`${matchCount} ${suffix} for "${query}"`);
+	} else {
+		const suffix = matchCount === 1 ? "node" : "nodes";
+		segments.push(`${matchCount} ${suffix}`);
+	}
+	if (hasStatusFilter) {
+		segments.push(`status: ${statusFilter}`);
+	}
+	searchSummary.textContent = segments.join(" · ");
 };
 
 const normalizeFilter = (query: string) => query.trim().toLowerCase();
@@ -685,18 +1239,66 @@ const nodeMatchesNormalized = (node: DtsNode, normalized: string): boolean => {
 	return haystacks.some((text) => text.toLowerCase().includes(normalized));
 };
 
-const filterDtsTree = (node: DtsNode, normalized: string): DtsNode | null => {
-	if (!normalized) {
-		return node;
+const extractStatusString = (value: unknown): string | null => {
+	if (typeof value === "string") {
+		return value;
 	}
+	if (Array.isArray(value)) {
+		for (const entry of value) {
+			const candidate = extractStatusString(entry);
+			if (candidate) {
+				return candidate;
+			}
+		}
+		return null;
+	}
+	if (typeof value === "number" || typeof value === "boolean") {
+		return String(value);
+	}
+	return null;
+};
 
+const getNodeStatus = (node: DtsNode): string | null => {
+	const property = node.properties.find((prop) => prop.name === "status");
+	if (!property) {
+		return null;
+	}
+	const extracted = extractStatusString(property.value as unknown);
+	return extracted ? extracted.toLowerCase().trim() : null;
+};
+
+const nodeMatchesStatus = (node: DtsNode, filter: StatusFilter): boolean => {
+	if (filter === "all") {
+		return true;
+	}
+	const status = getNodeStatus(node);
+	if (filter === "disabled") {
+		return status === "disabled" || status === "disable" || status === "off";
+	}
+	// Treat missing status as effectively "okay"
+	if (status === null) {
+		return true;
+	}
+	return status === "okay" || status === "ok" || status === "enabled";
+};
+
+const filterDtsTree = (
+	node: DtsNode,
+	normalized: string,
+	statusFilter: StatusFilter,
+	forced: Set<string>,
+): DtsNode | null => {
 	const filteredChildren = node.children
-		.map((child) => filterDtsTree(child, normalized))
+		.map((child) => filterDtsTree(child, normalized, statusFilter, forced))
 		.filter((child): child is DtsNode => child !== null);
 
-	const matchesSelf = nodeMatchesNormalized(node, normalized);
+	const matchesStatus = nodeMatchesStatus(node, statusFilter);
+	const matchesSearch = normalized ? nodeMatchesNormalized(node, normalized) : true;
+	const isForced = forced.has(node.path);
+	const matchesSelf = matchesStatus && matchesSearch;
+	const shouldKeep = matchesSelf || isForced || filteredChildren.length > 0;
 
-	if (!matchesSelf && filteredChildren.length === 0) {
+	if (!shouldKeep) {
 		return null;
 	}
 
@@ -704,7 +1306,7 @@ const filterDtsTree = (node: DtsNode, normalized: string): DtsNode | null => {
 		filteredChildren.length === node.children.length &&
 		filteredChildren.every((child, index) => child === node.children[index]);
 
-	if (matchesSelf && unchangedChildren) {
+	if ((matchesSelf || isForced) && unchangedChildren) {
 		return node;
 	}
 
@@ -714,12 +1316,20 @@ const filterDtsTree = (node: DtsNode, normalized: string): DtsNode | null => {
 	};
 };
 
-const applyFilter = (root: DtsNode | null, normalized: string): LayoutResult | null => {
-	if (!root || !normalized) {
+const buildFilteredLayout = (
+	root: DtsNode | null,
+	normalized: string,
+	statusFilter: StatusFilter,
+	forced: Set<string>,
+): LayoutResult | null => {
+	if (!root) {
+		return null;
+	}
+	if (!normalized && statusFilter === "all") {
 		return null;
 	}
 
-	const filteredRoot = filterDtsTree(root, normalized);
+	const filteredRoot = filterDtsTree(root, normalized, statusFilter, forced);
 	if (!filteredRoot) {
 		return null;
 	}
@@ -727,68 +1337,90 @@ const applyFilter = (root: DtsNode | null, normalized: string): LayoutResult | n
 	return layoutTree(filteredRoot);
 };
 
-const applySearch = (query: string) => {
-	activeFilterRaw = query;
-	activeFilterNormalized = normalizeFilter(query);
-	filteredLayout = applyFilter(currentRoot, activeFilterNormalized);
+const applyFilters = () => {
+	const normalized = activeFilterNormalized;
+	const statusFilter = activeStatusFilter;
+	const hasActiveFilters = Boolean(normalized) || statusFilter !== "all";
+	if (!hasActiveFilters) {
+		forcedVisiblePaths.clear();
+	}
+	filteredLayout = buildFilteredLayout(currentRoot, normalized, statusFilter, forcedVisiblePaths);
 	filteredNodes = filteredLayout?.nodes ?? [];
 
-	if (activeFilterNormalized) {
+	if (hasActiveFilters) {
+		const currentNodes = filteredNodes;
 		const existingSelection =
 			selectedNodePath &&
-			filteredNodes.find((node) => node.node.path === selectedNodePath);
+			currentNodes.find((node) => node.node.path === selectedNodePath);
 
-		if (!existingSelection && filteredNodes.length > 0) {
-			const firstMatch =
-				filteredNodes.find((node) =>
-					nodeMatchesNormalized(node.node, activeFilterNormalized),
-				) ?? filteredNodes[0]!;
-			selectedNodePath = firstMatch.node.path;
-			selectedNode = nodeByPath.get(selectedNodePath) ?? firstMatch.node;
+		if (!existingSelection) {
+			if (currentNodes.length > 0) {
+				const firstMatch =
+					(activeFilterNormalized
+						? currentNodes.find((node) =>
+							nodeMatchesNormalized(node.node, activeFilterNormalized),
+						)
+						: undefined) ?? currentNodes[0]!;
+				selectedNodePath = firstMatch.node.path;
+				selectedNode = nodeByPath.get(selectedNodePath) ?? firstMatch.node;
+				renderDetails(selectedNode);
+			} else {
+				selectedNodePath = null;
+				selectedNode = null;
+				renderDetails(null);
+			}
+		} else if (selectedNodePath) {
+			selectedNode =
+				nodeByPath.get(selectedNodePath) ?? existingSelection?.node ?? null;
 			renderDetails(selectedNode);
 		}
-	} else if (selectedNodePath) {
-		const baseNode = currentLayout?.nodes.find(
-			(node) => node.node.path === selectedNodePath,
-		);
-		if (!baseNode) {
-			selectedNodePath = null;
-			selectedNode = null;
+	} else {
+		if (selectedNodePath) {
+			const baseNode = currentLayout?.nodes.find(
+				(node) => node.node.path === selectedNodePath,
+			);
+			if (!baseNode) {
+				selectedNodePath = null;
+				selectedNode = null;
+				renderDetails(null);
+			} else {
+				selectedNode = nodeByPath.get(selectedNodePath) ?? baseNode.node;
+				renderDetails(selectedNode);
+			}
+		} else if (!selectedNode) {
 			renderDetails(null);
-		} else {
-			selectedNode = nodeByPath.get(selectedNodePath) ?? baseNode.node;
-			renderDetails(selectedNode);
 		}
-	} else if (!selectedNode) {
-		renderDetails(null);
 	}
 
-	const layoutToRender = filteredLayout ?? currentLayout;
-	if (layoutToRender) {
-		renderLayout(layoutToRender, selectedNodePath);
+	const layoutForFilters = filteredLayout ?? (hasActiveFilters ? null : currentLayout);
+	if (layoutForFilters) {
+		renderLayout(layoutForFilters, selectedNodePath);
+	} else if (canvas && ctx) {
+		ctx.clearRect(0, 0, canvas.width, canvas.height);
 	}
 
-	updateSearchSummary(activeFilterRaw.trim(), filteredNodes.length);
+	const summaryCount = filteredLayout ? filteredNodes.length : 0;
+	updateSearchSummary(activeFilterRaw.trim(), summaryCount, activeStatusFilter);
+};
+
+const applySearch = (query: string) => {
+	const normalized = normalizeFilter(query);
+	if (normalized !== activeFilterNormalized) {
+		forcedVisiblePaths.clear();
+	}
+	activeFilterRaw = query;
+	activeFilterNormalized = normalized;
+	applyFilters();
 };
 
 const clearSearch = () => {
 	activeFilterRaw = "";
 	activeFilterNormalized = "";
-	filteredLayout = null;
-	filteredNodes = [];
+	forcedVisiblePaths.clear();
 	if (searchInput) {
 		searchInput.value = "";
 	}
-	const layoutToRender = currentLayout;
-	if (layoutToRender) {
-		renderLayout(layoutToRender, selectedNodePath);
-	}
-	if (selectedNode) {
-		renderDetails(selectedNode);
-	} else {
-		renderDetails(null);
-	}
-	updateSearchSummary("", 0);
+	applyFilters();
 };
 
 const handleFileSelection = async (file: File) => {
@@ -835,7 +1467,119 @@ const attachEventHandlers = () => {
 		}
 	});
 
+	statusFilterSelect?.addEventListener("change", () => {
+		const value = statusFilterSelect.value;
+		activeStatusFilter = value === "disabled" ? "disabled" : value === "okay" ? "okay" : "all";
+		forcedVisiblePaths.clear();
+		applyFilters();
+	});
+
 	if (canvas) {
+		const endPan = () => {
+			if (!isPanning) {
+				return;
+			}
+			isPanning = false;
+			if (panPointerId !== null) {
+				try {
+					canvas.releasePointerCapture(panPointerId);
+				} catch (error) {
+					// Ignore if capture was not set
+				}
+			}
+			panPointerId = null;
+			canvas.style.cursor = "default";
+		};
+
+		canvas.addEventListener(
+			"wheel",
+			(event) => {
+				if (!event.ctrlKey) {
+					return;
+				}
+				event.preventDefault();
+				const layout = filteredLayout ?? currentLayout;
+				if (!layout) {
+					return;
+				}
+				if (isPanning) {
+					endPan();
+				}
+				const rect = canvas.getBoundingClientRect();
+				const pointerX = event.clientX - rect.left;
+				const pointerY = event.clientY - rect.top;
+				const metrics = computeCanvasMetrics(layout);
+				const worldX = (pointerX - metrics.translateX) / viewScale;
+				const worldY = (pointerY - metrics.translateY) / viewScale;
+				const zoomFactor = Math.exp(-event.deltaY * ZOOM_SENSITIVITY);
+				const nextScale = clamp(viewScale * zoomFactor, MIN_VIEW_SCALE, MAX_VIEW_SCALE);
+				if (nextScale === viewScale) {
+					return;
+				}
+				const newTranslateX = pointerX - worldX * nextScale;
+				const newTranslateY = pointerY - worldY * nextScale;
+				viewOffset = {
+					x: newTranslateX - metrics.baseTranslateX,
+					y: newTranslateY - metrics.baseTranslateY,
+				};
+				viewScale = nextScale;
+				const activeLayout = filteredLayout ?? currentLayout;
+				if (activeLayout) {
+					renderLayout(activeLayout, selectedNodePath);
+				}
+			},
+			{ passive: false },
+		);
+
+		canvas.addEventListener("pointerdown", (event) => {
+			if (event.button !== 1) {
+				return;
+			}
+			event.preventDefault();
+			isPanning = true;
+			panPointerId = event.pointerId;
+			panStart = { x: event.clientX, y: event.clientY };
+			panOrigin = { ...viewOffset };
+			try {
+				canvas.setPointerCapture(event.pointerId);
+			} catch (error) {
+				// Ignore if unsupported
+			}
+			canvas.style.cursor = "grabbing";
+		});
+
+		canvas.addEventListener("pointermove", (event) => {
+			if (!isPanning || panPointerId !== event.pointerId) {
+				return;
+			}
+			event.preventDefault();
+			const deltaX = event.clientX - panStart.x;
+			const deltaY = event.clientY - panStart.y;
+			viewOffset = {
+				x: panOrigin.x + deltaX,
+				y: panOrigin.y + deltaY,
+			};
+			const activeLayout = filteredLayout ?? currentLayout;
+			if (activeLayout) {
+				renderLayout(activeLayout, selectedNodePath);
+			}
+		});
+
+		canvas.addEventListener("pointerup", (event) => {
+			if (event.pointerId !== panPointerId) {
+				return;
+			}
+			event.preventDefault();
+			endPan();
+		});
+
+		canvas.addEventListener("pointercancel", (event) => {
+			if (event.pointerId !== panPointerId) {
+				return;
+			}
+			endPan();
+		});
+
 		canvas.addEventListener("click", (event) => {
 			const hit = pickNodeFromEvent(event);
 			if (hit) {
@@ -844,6 +1588,9 @@ const attachEventHandlers = () => {
 		});
 
 		canvas.addEventListener("mousemove", (event) => {
+			if (isPanning) {
+				return;
+			}
 			const hit = pickNodeFromEvent(event);
 			if (!canvas) {
 				return;
@@ -852,6 +1599,7 @@ const attachEventHandlers = () => {
 		});
 
 		canvas.addEventListener("mouseleave", () => {
+			endPan();
 			if (canvas) {
 				canvas.style.cursor = "default";
 			}
