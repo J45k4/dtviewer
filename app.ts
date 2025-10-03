@@ -932,8 +932,8 @@ const fitViewToLayout = (
         const { preserveExistingTransform = false } = options;
         const previousAutoFit = lastAutoFitScale;
         const fitScale = computeFitScale(layout);
-        minViewScale = Math.min(BASE_MIN_VIEW_SCALE, fitScale);
-        maxViewScale = fitScale;
+        minViewScale = fitScale;
+        maxViewScale = Math.max(BASE_MAX_VIEW_SCALE, fitScale);
         lastAutoFitScale = fitScale;
 
         if (preserveExistingTransform) {
