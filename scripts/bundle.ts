@@ -38,7 +38,7 @@ const bundledScript = await bundleFile.text();
 const escapedScript = bundledScript.replace(/<\/script>/g, "<\\/script>");
 const scriptPattern = /<script([^>]*?)\bsrc=["'][^"']*app\.(?:ts|js)["']([^>]*)>\s*<\/script>/i;
 
-const finalHtml = html.replace(scriptPattern, (match, preAttrs = "", postAttrs = "") => {
+let finalHtml = html.replace(scriptPattern, (match, preAttrs = "", postAttrs = "") => {
     const attributeSource = `${preAttrs}${postAttrs}`;
     const withoutSrc = attributeSource.replace(/\s*src\s*=\s*["'][^"']*["']/i, "");
     const normalizedAttrs = withoutSrc.replace(/\s+/g, " ").trim();
@@ -48,6 +48,30 @@ const finalHtml = html.replace(scriptPattern, (match, preAttrs = "", postAttrs =
 
 if (finalHtml === html) {
     console.warn("No <script> tag referencing app.ts or app.js found in index.html; script not inlined");
+}
+
+const faviconSource = Bun.file("favicon.ico");
+if (await faviconSource.exists()) {
+    const arrayBuffer = await faviconSource.arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString("base64");
+    const dataUrl = `data:image/x-icon;base64,${base64}`;
+    const faviconPattern = /<link[^>]*\brel=["']icon["'][^>]*>/i;
+
+    if (faviconPattern.test(finalHtml)) {
+        finalHtml = finalHtml.replace(faviconPattern, (match) => {
+            if (/href=/i.test(match)) {
+                return match.replace(/href\s*=\s*["'][^"']*["']/i, `href="${dataUrl}"`);
+            }
+            return match.replace(/>$/, ` href="${dataUrl}">`);
+        });
+    } else {
+        finalHtml = finalHtml.replace(
+            /<head[^>]*>/i,
+            (headTag) => `${headTag}\n        <link rel="icon" href="${dataUrl}">`
+        );
+    }
+} else {
+    console.warn("favicon.ico not found; leaving favicon link unchanged");
 }
 
 await mkdir(outDir, { recursive: true });
