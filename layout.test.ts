@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { DtsNode } from "./dts";
-import { layoutTree, type ReferenceEdge } from "./layout";
+import {
+    NODE_HEIGHT,
+    NODE_WIDTH,
+    layoutTree,
+    type ReferenceEdge,
+} from "./layout";
 
 const buildSyntheticTree = (fanout: number, depth: number) => {
     const root: DtsNode = {
@@ -74,5 +79,49 @@ describe("layoutTree radial performance", () => {
 
         expect(result.nodes.length).toBeGreaterThanOrEqual(totalNodes);
         expect(duration).toBeLessThan(150);
+    });
+
+    test("prevents overlapping node rectangles on each depth", () => {
+        const { root, nodeLookup, endpointPaths, referenceEdges } = buildSyntheticTree(3, 4);
+        const result = layoutTree(root, { referenceEdges, endpointPaths, nodeLookup });
+
+        const nodesByDepth = new Map<number, typeof result.nodes>();
+        result.nodes.forEach((node) => {
+            const list = nodesByDepth.get(node.depth);
+            if (list) {
+                list.push(node);
+            } else {
+                nodesByDepth.set(node.depth, [node]);
+            }
+        });
+
+        const overlaps: string[] = [];
+        const intersects = (a: typeof result.nodes[number], b: typeof result.nodes[number]) => {
+            const aLeft = a.x;
+            const aRight = a.x + NODE_WIDTH;
+            const aTop = a.y - NODE_HEIGHT / 2;
+            const aBottom = a.y + NODE_HEIGHT / 2;
+            const bLeft = b.x;
+            const bRight = b.x + NODE_WIDTH;
+            const bTop = b.y - NODE_HEIGHT / 2;
+            const bBottom = b.y + NODE_HEIGHT / 2;
+            const horizontal = aLeft < bRight && aRight > bLeft;
+            const vertical = aTop < bBottom && aBottom > bTop;
+            return horizontal && vertical;
+        };
+
+        nodesByDepth.forEach((nodesAtDepth) => {
+            for (let i = 0; i < nodesAtDepth.length; i += 1) {
+                for (let j = i + 1; j < nodesAtDepth.length; j += 1) {
+                    if (intersects(nodesAtDepth[i]!, nodesAtDepth[j]!)) {
+                        overlaps.push(
+                            `${nodesAtDepth[i]!.node.path} overlaps ${nodesAtDepth[j]!.node.path}`,
+                        );
+                    }
+                }
+            }
+        });
+
+        expect(overlaps).toHaveLength(0);
     });
 });

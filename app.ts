@@ -32,137 +32,310 @@ const warningsPanel = document.querySelector<HTMLPreElement>("#warnings-panel");
 
 const ctx = canvas?.getContext("2d");
 
-const SAMPLE_DTS = `
-/ {
-        model = "Sample i.MX8 Board";
-        compatible = "fsl,imx8mp";
+const SAMPLE_DTS = (() => {
+        const lines: string[] = [
+                "/ {",
+                "        model = \"Sample i.MX8 Board\";",
+                "        compatible = \"fsl,imx8mp\";",
+                "",
+                "        chosen {",
+                "                bootargs = \"console=ttyS0,115200 earlycon\";",
+                "                stdout-path = &uart3;",
+                "        };",
+                "",
+                "        aliases {",
+                "                ethernet0 = &fec1;",
+                "                i2c0 = &i2c1;",
+                "        };",
+                "",
+                "        memory@40000000 {",
+                "                device_type = \"memory\";",
+                "                reg = <0x40000000 0x40000000>;",
+                "        };",
+                "",
+                "        reserved-memory {",
+                "                #address-cells = <0x2>;",
+                "                #size-cells = <0x2>;",
+                "                ranges;",
+                "",
+                "                framebuffer@90000000 {",
+                "                        reg = <0x0 0x90000000 0x0 0x800000>;",
+                "                        no-map;",
+                "                };",
+                "",
+                "                rpmsg@0x400000 {",
+                "                        reg = <0x0 0x400000 0x0 0x400000>;",
+                "                };",
+                "        };",
+                "",
+                "        soc@0 {",
+                "                #address-cells = <0x1>;",
+                "                #size-cells = <0x1>;",
+                "                compatible = \"simple-bus\";",
+                "                ranges;",
+                "",
+                "                uart3: serial@30890000 {",
+                "                        compatible = \"fsl,imx8mp-uart\", \"fsl,imx21-uart\";",
+                "                        reg = <0x30890000 0x1000>;",
+                "                        interrupts = <0x0 0x37 0x4>;",
+                "                        clocks = <0x2 0x19>;",
+                "                        status = \"okay\";",
+                "                };",
+                "",
+                "                i2c1: i2c@30a20000 {",
+                "                        compatible = \"fsl,imx8mp-i2c\", \"fsl,imx21-i2c\";",
+                "                        reg = <0x30a20000 0x10000>;",
+                "                        interrupts = <0x0 0x24 0x4>;",
+                "                        clocks = <0x2 0x7d>;",
+                "                        status = \"okay\";",
+                "",
+                "                        temperature-sensor@48 {",
+                "                                compatible = \"ti,tmp102\";",
+                "                                reg = <0x48>;",
+                "                                status = \"okay\";",
+                "                        };",
+                "",
+                "                        touchscreen@4a {",
+                "                                compatible = \"edt,edt-ft5406\";",
+                "                                reg = <0x4a>;",
+                "                                interrupt-parent = <0x2>;",
+                "                                interrupts = <0x6a 0x1>;",
+                "                                reset-gpios = <0x3 0x1f 0x1>;",
+                "                                status = \"okay\";",
+                "                        };",
+                "                };",
+                "",
+                "                fec1: ethernet@30be0000 {",
+                "                        compatible = \"fsl,imx8mp-fec\";",
+                "                        reg = <0x30be0000 0x10000>;",
+                "                        phy-handle = <0xa1>;",
+                "                        phy-mode = \"rgmii-id\";",
+                "                        status = \"okay\";",
+                "                };",
+                "",
+                "                gpu@38000000 {",
+                "                        compatible = \"vivante,gc7000\";",
+                "                        reg = <0x38000000 0x40000>;",
+                "                        interrupts = <0x0 0x94 0x4>;",
+                "                        status = \"okay\";",
+                "                };",
+                "",
+                "                ldb-display-controller {",
+                "                        lvds-channel@0 {",
+                "                                port@0 {",
+                "                                        endpoint {",
+                "                                                remote-endpoint = <0x85>;",
+                "                                                phandle = <0x5f>;",
+                "                                        };",
+                "                                };",
+                "",
+                "                                port@1 {",
+                "                                        endpoint {",
+                "                                                remote-endpoint = <0x86>;",
+                "                                                phandle = <0xa2>;",
+                "                                        };",
+                "                                };",
+                "                        };",
+                "                };",
+        ];
 
-        chosen {
-                bootargs = "console=ttyS0,115200 earlycon";
-                stdout-path = &uart3;
+        const addI2cCluster = (busIndex: number) => {
+                const busAddr = (0x30a40000 + busIndex * 0x10000).toString(16);
+                const busLabel = `i2c${busIndex + 2}`;
+                lines.push(
+                        `                ${busLabel}: i2c@${busAddr} {`,
+                        "                        compatible = \"fsl,imx8mp-i2c\", \"fsl,imx21-i2c\";",
+                        `                        reg = <0x${busAddr} 0x10000>;`,
+                        "                        interrupts = <0x0 0x24 0x4>;",
+                        "                        clocks = <0x2 0x7d>;",
+                        "                        status = \"okay\";",
+                );
+
+                for (let device = 0; device < 6; device += 1) {
+                        const address = 0x10 + busIndex * 0x10 + device;
+                        const addrHex = address.toString(16);
+                        lines.push(
+                                `                        sensor@${addrHex} {`,
+                                `                                compatible = \"nxp,s${busIndex}${device}18\";`,
+                                `                                reg = <0x${addrHex}>;`,
+                                "                                status = \"okay\";",
+                                "                        };",
+                        );
+                }
+
+                lines.push("                };");
         };
 
-        aliases {
-                ethernet0 = &fec1;
-                i2c0 = &i2c1;
+        for (let bus = 0; bus < 5; bus += 1) {
+                addI2cCluster(bus);
+        }
+
+        const addSpiController = (index: number) => {
+                const baseAddr = 0x30800000 + index * 0x10000;
+                const addrHex = baseAddr.toString(16);
+                lines.push(
+                        `                spi${index}: spi@${addrHex} {`,
+                        "                        compatible = \"fsl,imx8mp-ecspi\";",
+                        `                        reg = <0x${addrHex} 0x10000>;`,
+                        "                        #address-cells = <0x1>;",
+                        "                        #size-cells = <0x0>;",
+                        "                        status = \"okay\";",
+                );
+
+                for (let chip = 0; chip < 4; chip += 1) {
+                        const chipSelect = chip.toString(16);
+                        lines.push(
+                                `                        flash@${chipSelect} {`,
+                                "                                compatible = \"jedec,spi-nor\";",
+                                `                                reg = <0x${chipSelect}>;`,
+                                "                                spi-max-frequency = <0x1312d00>;",
+                                "                                status = \"okay\";",
+                                "                        };",
+                        );
+                }
+
+                lines.push("                };");
         };
 
-        memory@40000000 {
-                device_type = "memory";
-                reg = <0x40000000 0x40000000>;
-        };
+        for (let spiIndex = 0; spiIndex < 4; spiIndex += 1) {
+                addSpiController(spiIndex);
+        }
 
-        soc@0 {
-                #address-cells = <0x1>;
-                #size-cells = <0x1>;
-                compatible = "simple-bus";
-                ranges;
+        lines.push(
+                "",
+                "                audio@30000000 {",
+                "                        compatible = \"fsl,imx8mp-sai\";",
+                "                        reg = <0x30000000 0x10000>;",
+                "                        status = \"okay\";",
+                "",
+                "                        codec@0 {",
+                "                                compatible = \"nxp,sgtl5000\";",
+                "                                reg = <0x0>;",
+                "                                status = \"okay\";",
+                "                        };",
+                "                };",
+                "",
+                "                pcie@33800000 {",
+                "                        compatible = \"fsl,imx8mp-pcie\";",
+                "                        reg = <0x33800000 0x400000>;",
+                "                        status = \"okay\";",
+                "",
+                "                        bridge@0 {",
+                "                                compatible = \"pci,pci-bridge\";",
+                "                                reg = <0x0 0x0 0x0 0x0>;",
+                "                                status = \"okay\";",
+                "",
+                "                                endpoint@0,0 {",
+                "                                        reg = <0x0 0x0 0x0 0x0>;",
+                "                                        compatible = \"pci14e4,165f\";",
+                "                                };",
+                "",
+                "                                endpoint@1,0 {",
+                "                                        reg = <0x1 0x0 0x0 0x0>;",
+                "                                        compatible = \"pci8086,1539\";",
+                "                                };",
+                "                        };",
+                "                };",
+        );
 
-                uart3: serial@30890000 {
-                        compatible = "fsl,imx8mp-uart", "fsl,imx21-uart";
-                        reg = <0x30890000 0x1000>;
-                        interrupts = <0x0 0x37 0x4>;
-                        clocks = <0x2 0x19>;
-                        status = "okay";
-                };
+        lines.push("        };", "");
 
-                i2c1: i2c@30a20000 {
-                        compatible = "fsl,imx8mp-i2c", "fsl,imx21-i2c";
-                        reg = <0x30a20000 0x10000>;
-                        interrupts = <0x0 0x24 0x4>;
-                        clocks = <0x2 0x7d>;
-                        status = "okay";
+        lines.push(
+                "        backlight: backlight@0 {",
+                "                compatible = \"pwm-backlight\";",
+                "                pwms = <0x7 0x0 0x3e8 0x0>;",
+                "                brightness-levels = <0x0 0x1e 0x3c 0x64 0x96 0xc8 0xff>;",
+                "                default-brightness-level = <0x3>;",
+                "                status = \"okay\";",
+                "        };",
+                "",
+                "        panel@0 {",
+                "                compatible = \"panel-lvds\";",
+                "                backlight = <0xa1>;",
+                "                status = \"okay\";",
+                "",
+                "                port {",
+                "                        panel_in: endpoint@0 {",
+                "                                remote-endpoint = <0x5f>;",
+                "                                phandle = <0x85>;",
+                "                        };",
+                "                };",
+                "        };",
+                "",
+                "        usb@32f10108 {",
+                "                compatible = \"fsl,imx8mp-dwc3\";",
+                "                phandle = <0x83>;",
+                "                clocks = <0x2 0x10c 0x2 0x140>;",
+                "                clock-names = \"hsio\", \"suspend\";",
+                "                interrupts = <0x0 0x95 0x4>;",
+                "                ranges;",
+                "                status = \"okay\";",
+                "",
+                "                usb@38200000 {",
+                "                        compatible = \"snps,dwc3\";",
+                "                        phys = <0x83 0x83>;",
+                "                        phy-names = \"usb2-phy\", \"usb3-phy\";",
+                "                        dr_mode = \"host\";",
+                "                        status = \"okay\";",
+                "                };",
+                "        };",
+                "",
+                "        leds {",
+                "                compatible = \"gpio-leds\";",
+                "",
+                "                status-led {",
+                "                        gpios = <0x4 0x12 0x0>;",
+                "                        default-state = \"on\";",
+                "                };",
+                "",
+                "                heartbeat-led {",
+                "                        gpios = <0x4 0x13 0x0>;",
+                "                        linux,default-trigger = \"heartbeat\";",
+                "                };",
+                "        };",
+                "",
+                "        regulators {",
+                "                compatible = \"simple-bus\";",
+                "",
+                "                buck@0 {",
+                "                        regulator-name = \"vdd_soc\";",
+                "                        regulator-min-microvolt = <0xf4240>;",
+                "                        regulator-max-microvolt = <0x16e360>;",
+                "                };",
+                "",
+                "                buck@1 {",
+                "                        regulator-name = \"vdd_gpu\";",
+                "                        regulator-min-microvolt = <0xf4240>;",
+                "                        regulator-max-microvolt = <0x16e360>;",
+                "                };",
+                "        };",
+                "",
+                "        thermal-zones {",
+                "                board {",
+                "                        polling-delay-passive = <0x3e8>;",
+                "                        polling-delay = <0x7d0>;",
+                "",
+                "                        trips {",
+                "                                cpu-crit {",
+                "                                        temperature = <0x1312d0>;",
+                "                                        hysteresis = <0x64>;",
+                "                                        type = \"critical\";",
+                "                                };",
+                "                        };",
+                "                };",
+                "        };",
+                "",
+                "        watchdog@30280000 {",
+                "                compatible = \"fsl,imx8mp-wdt\";",
+                "                reg = <0x30280000 0x10000>;",
+                "                status = \"okay\";",
+                "        };",
+        );
 
-                        temperature-sensor@48 {
-                                compatible = "ti,tmp102";
-                                reg = <0x48>;
-                                status = "okay";
-                        };
+        lines.push("};");
 
-                        touchscreen@4a {
-                                compatible = "edt,edt-ft5406";
-                                reg = <0x4a>;
-                                interrupt-parent = <0x2>;
-                                interrupts = <0x6a 0x1>;
-                                reset-gpios = <0x3 0x1f 0x1>;
-                                status = "okay";
-                        };
-                };
-
-                fec1: ethernet@30be0000 {
-                        compatible = "fsl,imx8mp-fec";
-                        reg = <0x30be0000 0x10000>;
-                        phy-handle = <0xa1>;
-                        phy-mode = "rgmii-id";
-                        status = "okay";
-                };
-
-                gpu@38000000 {
-                        compatible = "vivante,gc7000";
-                        reg = <0x38000000 0x40000>;
-                        interrupts = <0x0 0x94 0x4>;
-                        status = "okay";
-                };
-
-                ldb-display-controller {
-                        lvds-channel@0 {
-                                port@0 {
-                                        endpoint {
-                                                remote-endpoint = <0x85>;
-                                                phandle = <0x5f>;
-                                        };
-                                };
-
-                                port@1 {
-                                        endpoint {
-                                                remote-endpoint = <0x86>;
-                                                phandle = <0xa2>;
-                                        };
-                                };
-                        };
-                };
-        };
-
-        backlight: backlight@0 {
-                compatible = "pwm-backlight";
-                pwms = <0x7 0x0 0x3e8 0x0>;
-                brightness-levels = <0x0 0x1e 0x3c 0x64 0x96 0xc8 0xff>;
-                default-brightness-level = <0x3>;
-                status = "okay";
-        };
-
-        panel@0 {
-                compatible = "panel-lvds";
-                backlight = <0xa1>;
-                status = "okay";
-
-                port {
-                        panel_in: endpoint@0 {
-                                remote-endpoint = <0x5f>;
-                                phandle = <0x85>;
-                        };
-                };
-        };
-
-        usb@32f10108 {
-                compatible = "fsl,imx8mp-dwc3";
-                phandle = <0x83>;
-                clocks = <0x2 0x10c 0x2 0x140>;
-                clock-names = "hsio", "suspend";
-                interrupts = <0x0 0x95 0x4>;
-                ranges;
-                status = "okay";
-
-                usb@38200000 {
-                        compatible = "snps,dwc3";
-                        phys = <0x83 0x83>;
-                        phy-names = "usb2-phy", "usb3-phy";
-                        dr_mode = "host";
-                        status = "okay";
-                };
-        };
-};
-`;
+        return lines.join("\n");
+})();
 
 let currentLayout: LayoutResult | null = null;
 let currentRoot: DtsNode | null = null;
