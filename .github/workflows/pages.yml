@@ -19,11 +19,10 @@ concurrency:
 env:
   BUILD_DIR: dist
   PAGES_BRANCH: gh-pages
-  PREVIEW_DIR: pr/${{ github.event.pull_request.number }}
 
 jobs:
   build:
-    if: github.event.action != 'closed'
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,19 +30,14 @@ jobs:
         with:
           bun-version: latest
       - run: bun install
-      # If your bundler needs a base path, uncomment and pass it:
-      # - name: Set BASE_PATH for previews
-      #   if: github.event_name == 'pull_request'
-      #   run: echo "BASE_PATH=/$([[ '${{ github.repository }}' =~ ^${{ github.repository_owner }}\/${{ github.repository_owner }}\.github\.io$ ]] && echo '' || echo '${{ github.event.repository.name }}')/${{ env.PREVIEW_DIR }}/" >> $GITHUB_ENV
       - run: bun run bundle
-        # env:
-        #   BASE_PATH: ${{ env.BASE_PATH }}
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: site-build
           path: ${{ env.BUILD_DIR }}
 
+  # --- Deploy production (root) on push to master ---
   deploy_prod:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/master')
     needs: build
@@ -60,16 +54,14 @@ jobs:
           publish_branch: ${{ env.PAGES_BRANCH }}
           publish_dir: ${{ env.BUILD_DIR }}
           keep_files: true
-      - name: List gh-pages root (debug)
-        run: |
-          git fetch origin ${{ env.PAGES_BRANCH }}:${{ env.PAGES_BRANCH }}
-          git checkout ${{ env.PAGES_BRANCH }}
-          ls -la
 
+  # --- Deploy PR preview to /pr/<num>/ ---
   deploy_preview:
     if: github.event_name == 'pull_request' && github.event.action != 'closed'
     needs: build
     runs-on: ubuntu-latest
+    env:
+      PREVIEW_DIR: pr/${{ github.event.pull_request.number }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -83,33 +75,30 @@ jobs:
           publish_dir: ${{ env.BUILD_DIR }}
           destination_dir: ${{ env.PREVIEW_DIR }}
           keep_files: true
-      - name: Compute Preview URL
-        id: url
+      - name: Compute preview URL
+        id: compute_url
         run: |
           OWNER="${{ github.repository_owner }}"
           REPO="${{ github.event.repository.name }}"
-          # If repo is <owner>.github.io, base path is empty; otherwise /REPO
           if [ "$REPO" = "${OWNER}.github.io" ]; then
             BASE=""
           else
-            BASE="/${REPO}"
+            BASE="/$REPO"
           fi
-          echo "url=https://${OWNER}.github.io${BASE}/${{ env.PREVIEW_DIR }}/" >> $GITHUB_OUTPUT
-      - name: Sanity check: list deployed files
-        run: |
-          git fetch origin ${{ env.PAGES_BRANCH }}:${{ env.PAGES_BRANCH }}
-          git checkout ${{ env.PAGES_BRANCH }}
-          ls -la "${{ env.PREVIEW_DIR }}" || true
+          echo "URL=https://${OWNER}.github.io${BASE}/${{ env.PREVIEW_DIR }}/" >> $GITHUB_OUTPUT
       - name: Comment preview URL
         uses: thollander/actions-comment-pull-request@v3
         with:
           message: |
-            🔍 **Preview ready**  
-            ${{ steps.url.outputs.url }}
+            🔍 **Preview ready**
+            ${{ steps.compute_url.outputs.URL }}
 
+  # --- Cleanup preview when PR is closed ---
   cleanup_preview:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
+    env:
+      PREVIEW_DIR: pr/${{ github.event.pull_request.number }}
     steps:
       - name: Checkout gh-pages
         uses: actions/checkout@v4
