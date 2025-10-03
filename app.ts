@@ -379,7 +379,6 @@ const nodeByPhandle = new Map<number, DtsNode>();
 // remote-endpoint / remote-endpoints properties (and the nodes containing those properties).
 const endpointPaths = new Set<string>();
 // Reference edges (phandle or label references) collected from properties.
-type ReferenceEdge = { source: string; target: string; viaProperty: string; kind: "phandle" | "label" };
 let referenceEdges: ReferenceEdge[] = [];
 const forcedVisiblePaths = new Set<string>();
 const forcedVisibilityAnchors = new Map<string, string | null>();
@@ -391,29 +390,86 @@ const HANDLE_PROPERTY_NAMES = new Set([
 ]);
 
 const truncate = (value: string, max = 32): string => {
-	if (value.length <= max) {
-		return value;
-	}
-	return `${value.slice(0, max - 1)}…`;
+        if (value.length <= max) {
+                return value;
+        }
+        return `${value.slice(0, max - 1)}…`;
 };
 
 const countNodes = (node: DtsNode): number =>
-	1 + node.children.reduce((sum, child) => sum + countNodes(child), 0);
+        1 + node.children.reduce((sum, child) => sum + countNodes(child), 0);
 
 const collectNumbersFromValue = (value: DtsValue): number[] => {
-	const collected: number[] = [];
-	const visit = (candidate: unknown) => {
-		if (Array.isArray(candidate)) {
-			candidate.forEach(visit);
-			return;
-		}
-		if (typeof candidate === "number" && Number.isFinite(candidate)) {
-			collected.push(candidate);
-		}
-	};
+        const collected: number[] = [];
+        const visit = (candidate: unknown) => {
+                if (Array.isArray(candidate)) {
+                        candidate.forEach(visit);
+                        return;
+                }
+                if (typeof candidate === "number" && Number.isFinite(candidate)) {
+                        collected.push(candidate);
+                }
+        };
 
-	visit(value as unknown);
-	return collected;
+        visit(value as unknown);
+        return collected;
+};
+
+const formatHandleNumber = (value: number): string =>
+        value >= 10 ? `0x${value.toString(16)}` : String(value);
+
+type PropertyReference = {
+        target: DtsNode;
+        display: string;
+        kind: "phandle" | "label";
+};
+
+const collectPropertyReferences = (property: DtsProperty): PropertyReference[] => {
+        const references: PropertyReference[] = [];
+        const seen = new Set<string>();
+        const nameLower = property.name.toLowerCase();
+        const allowNumeric =
+                HANDLE_PROPERTY_NAMES.has(nameLower) ||
+                property.type === "cell-list" ||
+                property.type === "number" ||
+                property.type === "mixed";
+
+        const addReference = (target: DtsNode, display: string, kind: PropertyReference["kind"]) => {
+                const key = `${target.path}|${kind}|${display}`;
+                if (seen.has(key)) {
+                        return;
+                }
+                seen.add(key);
+                references.push({ target, display, kind });
+        };
+
+        const inspect = (candidate: unknown) => {
+                if (Array.isArray(candidate)) {
+                        candidate.forEach(inspect);
+                        return;
+                }
+
+                if (candidate && typeof candidate === "object") {
+                        if ("ref" in candidate && typeof (candidate as { ref?: unknown }).ref === "string") {
+                                const label = String((candidate as { ref: string }).ref);
+                                const target = nodeByLabel.get(label);
+                                if (target) {
+                                        addReference(target, `&${label}`, "label");
+                                }
+                        }
+                        return;
+                }
+
+                if (allowNumeric && typeof candidate === "number" && Number.isFinite(candidate)) {
+                        const target = nodeByPhandle.get(candidate);
+                        if (target) {
+                                addReference(target, formatHandleNumber(candidate), "phandle");
+                        }
+                }
+        };
+
+        inspect(property.value as unknown);
+        return references;
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -541,71 +597,40 @@ const rebuildNodeIndexes = (root: DtsNode | null) => {
 		});
 	});
 
-	// Build reference edges exclusively for remote-endpoint links.
-	const edgeDedup = new Set<string>();
-	const undirectedSeen = new Set<string>();
-	const tryAdd = (edge: ReferenceEdge) => {
-		if (edge.source === edge.target) {
-			return;
-		}
-		if (!endpointPaths.has(edge.target)) {
-			return;
-		}
-		const undirectedKey = edge.source < edge.target
-			? `${edge.source}|${edge.target}`
-			: `${edge.target}|${edge.source}`;
-		if (undirectedSeen.has(undirectedKey)) {
-			return;
-		}
-		const key = `${edge.source}|${edge.target}|${edge.viaProperty}`;
-		if (edgeDedup.has(key)) {
-			return;
-		}
-		edgeDedup.add(key);
-		undirectedSeen.add(undirectedKey);
-		referenceEdges.push(edge);
-	};
+        // Build reference edges for any property that links via labels or phandles.
+        const edgeDedup = new Set<string>();
+        const undirectedSeen = new Set<string>();
+        const tryAdd = (edge: ReferenceEdge) => {
+                if (edge.source === edge.target) {
+                        return;
+                }
+                const undirectedKey = edge.source < edge.target
+                        ? `${edge.source}|${edge.target}`
+                        : `${edge.target}|${edge.source}`;
+                if (undirectedSeen.has(undirectedKey)) {
+                        return;
+                }
+                const key = `${edge.source}|${edge.target}|${edge.viaProperty}|${edge.kind}`;
+                if (edgeDedup.has(key)) {
+                        return;
+                }
+                edgeDedup.add(key);
+                undirectedSeen.add(undirectedKey);
+                referenceEdges.push(edge);
+        };
 
-	allNodes.forEach((node) => {
-		node.properties.forEach((prop) => {
-			if (!REMOTE_NAMES.has(prop.name)) {
-				return;
-			}
-			const visitVal = (val: unknown) => {
-				if (Array.isArray(val)) {
-					val.forEach(visitVal);
-					return;
-				}
-				if (val && typeof val === "object") {
-					if ("ref" in val && typeof (val as { ref?: unknown }).ref === "string") {
-						const label = (val as { ref: string }).ref;
-						const target = nodeByLabel.get(label);
-						if (target) {
-							tryAdd({
-								source: node.path,
-								target: target.path,
-								viaProperty: prop.name,
-								kind: "label",
-							});
-						}
-					}
-					return;
-				}
-				if (typeof val === "number" && Number.isFinite(val)) {
-					const target = nodeByPhandle.get(val);
-					if (target) {
-						tryAdd({
-							source: node.path,
-							target: target.path,
-							viaProperty: prop.name,
-							kind: "phandle",
-						});
-					}
-				}
-			};
-			visitVal(prop.value as unknown);
-		});
-	});
+        allNodes.forEach((node) => {
+                node.properties.forEach((prop) => {
+                        collectPropertyReferences(prop).forEach((ref) => {
+                                tryAdd({
+                                        source: node.path,
+                                        target: ref.target.path,
+                                        viaProperty: prop.name,
+                                        kind: ref.kind,
+                                });
+                        });
+                });
+        });
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -644,22 +669,19 @@ const formatValue = (value: DtsValue): string => {
 };
 
 const appendMetaRow = (
-	container: HTMLDListElement,
-	label: string,
-	value: string | number | undefined,
+        container: HTMLDListElement,
+        label: string,
+        value: string | number | undefined,
 ) => {
-	if (value === undefined || value === "") {
-		return;
-	}
-	const dt = document.createElement("dt");
-	dt.textContent = label;
-	const dd = document.createElement("dd");
-	dd.textContent = String(value);
-	container.append(dt, dd);
+        if (value === undefined || value === "") {
+                return;
+        }
+        const dt = document.createElement("dt");
+        dt.textContent = label;
+        const dd = document.createElement("dd");
+        dd.textContent = String(value);
+        container.append(dt, dd);
 };
-
-const formatHandleNumber = (value: number): string =>
-	value >= 10 ? `0x${value.toString(16)}` : String(value);
 
 const findLayoutNodeByPath = (path: string, layout: LayoutResult | null): LayoutNode | null => {
         if (!layout) {
@@ -826,57 +848,10 @@ const focusNodeByPath = (path: string) => {
 	selectLayoutNode(layoutNode);
 };
 
-type PropertyLink = {
-	target: DtsNode;
-	display: string;
-};
+type PropertyLink = PropertyReference;
 
-const resolvePropertyLinks = (property: DtsProperty): PropertyLink[] => {
-	const links: PropertyLink[] = [];
-	const seen = new Set<string>();
-	const nameLower = property.name.toLowerCase();
-        const allowNumeric =
-                HANDLE_PROPERTY_NAMES.has(nameLower) ||
-                property.type === "cell-list" ||
-                property.type === "number";
-
-	const addLink = (target: DtsNode, display: string) => {
-		const key = `${target.path}|${display}`;
-		if (seen.has(key)) {
-			return;
-		}
-		seen.add(key);
-		links.push({ target, display });
-	};
-
-	const inspect = (candidate: unknown) => {
-		if (Array.isArray(candidate)) {
-			candidate.forEach(inspect);
-			return;
-		}
-
-		if (candidate && typeof candidate === "object") {
-			if ("ref" in candidate && typeof (candidate as { ref?: unknown }).ref === "string") {
-				const label = String((candidate as { ref: string }).ref);
-				const target = nodeByLabel.get(label);
-				if (target) {
-					addLink(target, `&${label}`);
-				}
-			}
-			return;
-		}
-
-		if (allowNumeric && typeof candidate === "number" && Number.isFinite(candidate)) {
-			const target = nodeByPhandle.get(candidate);
-			if (target) {
-				addLink(target, formatHandleNumber(candidate));
-			}
-		}
-	};
-
-	inspect(property.value as unknown);
-	return links;
-};
+const resolvePropertyLinks = (property: DtsProperty): PropertyLink[] =>
+        collectPropertyReferences(property);
 
 const renderDetails = (node: DtsNode | null) => {
 	if (!detailsContent || !detailsTitle) {
@@ -1206,31 +1181,31 @@ const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
 		const isEndpoint = endpointPaths.has(node.node.path);
 		const isPortal = node.portal;
 
-		if (isSelected) {
-			ctx.setLineDash([]);
-			ctx.fillStyle = "rgba(59, 130, 246, 0.92)";
-			ctx.strokeStyle = "rgba(29, 78, 216, 0.95)";
-			ctx.lineWidth = 2.2;
-		} else if (isPortal && isEndpoint) {
-			ctx.setLineDash([3, 3]);
-			ctx.fillStyle = "rgba(224, 242, 254, 0.9)";
-			ctx.strokeStyle = "rgba(2, 132, 199, 0.9)";
-			ctx.lineWidth = 1.6;
-		} else if (isPortal) {
-			ctx.setLineDash([3, 3]);
-			ctx.fillStyle = "rgba(254, 243, 199, 0.9)";
-			ctx.strokeStyle = "rgba(217, 119, 6, 0.9)";
-			ctx.lineWidth = 1.5;
-		} else if (isEndpoint) {
-			ctx.setLineDash([]);
-			ctx.fillStyle = "rgba(191, 219, 254, 0.85)";
-			ctx.strokeStyle = "rgba(96, 165, 250, 0.9)";
-			ctx.lineWidth = 1.4;
-		} else {
-			ctx.setLineDash([]);
-			ctx.fillStyle = "rgba(255, 255, 255, 0.94)";
-			ctx.strokeStyle = "rgba(60, 60, 70, 0.8)";
-			ctx.lineWidth = 1.2;
+                if (isSelected) {
+                        ctx.setLineDash([]);
+                        ctx.fillStyle = "rgba(59, 130, 246, 0.92)";
+                        ctx.strokeStyle = "rgba(29, 78, 216, 0.95)";
+                        ctx.lineWidth = 2.2;
+                } else if (isPortal && isEndpoint) {
+                        ctx.setLineDash([3, 3]);
+                        ctx.fillStyle = "rgba(252, 244, 214, 0.92)";
+                        ctx.strokeStyle = "rgba(217, 119, 6, 0.88)";
+                        ctx.lineWidth = 1.6;
+                } else if (isPortal) {
+                        ctx.setLineDash([3, 3]);
+                        ctx.fillStyle = "rgba(254, 243, 199, 0.9)";
+                        ctx.strokeStyle = "rgba(217, 119, 6, 0.9)";
+                        ctx.lineWidth = 1.5;
+                } else if (isEndpoint) {
+                        ctx.setLineDash([4, 3]);
+                        ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+                        ctx.strokeStyle = "rgba(71, 85, 105, 0.9)";
+                        ctx.lineWidth = 1.4;
+                } else {
+                        ctx.setLineDash([]);
+                        ctx.fillStyle = "rgba(255, 255, 255, 0.94)";
+                        ctx.strokeStyle = "rgba(60, 60, 70, 0.8)";
+                        ctx.lineWidth = 1.2;
 		}
 		ctx.beginPath();
 		ctx.roundRect(left, top, NODE_WIDTH, NODE_HEIGHT, 10);
@@ -1253,11 +1228,23 @@ const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
 		}
 		const subtitle = details.join(" · ");
 
-		ctx.fillStyle = isSelected ? "#f8fafc" : isPortal ? "#78350f" : isEndpoint ? "#0f172a" : "#111827";
-		ctx.fillText(truncate(labelText, 28), left + 12, node.y - 10);
+                ctx.fillStyle = isSelected
+                        ? "#f8fafc"
+                        : isPortal
+                          ? "#78350f"
+                          : isEndpoint
+                            ? "#1f2937"
+                            : "#111827";
+                ctx.fillText(truncate(labelText, 28), left + 12, node.y - 10);
 
-		ctx.fillStyle = isSelected ? "#e5e7eb" : isPortal ? "#92400e" : isEndpoint ? "#1e3a8a" : "#4b5563";
-		ctx.fillText(truncate(subtitle, 32), left + 12, node.y + 10);
+                ctx.fillStyle = isSelected
+                        ? "#e5e7eb"
+                        : isPortal
+                          ? "#92400e"
+                          : isEndpoint
+                            ? "#475569"
+                            : "#4b5563";
+                ctx.fillText(truncate(subtitle, 32), left + 12, node.y + 10);
 	});
 
 	ctx.restore();
