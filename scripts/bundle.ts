@@ -53,7 +53,8 @@ if (finalHtml === html) {
 const faviconSource = Bun.file("favicon.ico");
 if (await faviconSource.exists()) {
     const arrayBuffer = await faviconSource.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString("base64");
+    const buffer = Buffer.from(arrayBuffer);
+    const base64 = buffer.toString("base64");
     const dataUrl = `data:image/x-icon;base64,${base64}`;
     const faviconPattern = /<link[^>]*\brel=["']icon["'][^>]*>/i;
 
@@ -70,6 +71,8 @@ if (await faviconSource.exists()) {
             (headTag) => `${headTag}\n        <link rel="icon" href="${dataUrl}">`
         );
     }
+
+    await writeFile(join(outDir, "favicon.ico"), buffer);
 } else {
     console.warn("favicon.ico not found; leaving favicon link unchanged");
 }
