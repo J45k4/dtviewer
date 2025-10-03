@@ -16,11 +16,12 @@ type LayoutNode = {
 
 type StatusFilter = "all" | "okay" | "disabled";
 
-const RADIAL_LAYER_GAP = 220;
 const NODE_WIDTH = 180;
 const NODE_HEIGHT = 48;
 const NODE_GAP = 24;
 const CANVAS_PADDING = 48;
+const HORIZONTAL_STEP = NODE_WIDTH + NODE_GAP;
+const LAYER_VERTICAL_GAP = NODE_HEIGHT + NODE_GAP * 2;
 
 const fileInput = document.querySelector<HTMLInputElement>("#dts-input");
 const sampleButton = document.querySelector<HTMLButtonElement>("#load-sample");
@@ -473,7 +474,10 @@ const resolvePropertyLinks = (property: DtsProperty): PropertyLink[] => {
 	const links: PropertyLink[] = [];
 	const seen = new Set<string>();
 	const nameLower = property.name.toLowerCase();
-	const allowNumeric = HANDLE_PROPERTY_NAMES.has(nameLower);
+        const allowNumeric =
+                HANDLE_PROPERTY_NAMES.has(nameLower) ||
+                property.type === "cell-list" ||
+                property.type === "number";
 
 	const addLink = (target: DtsNode, display: string) => {
 		const key = `${target.path}|${display}`;
@@ -651,238 +655,169 @@ const updateStatus = (
 };
 
 const layoutTree = (root: DtsNode): LayoutResult => {
-	const portalTargetsBySource = new Map<string, DtsNode[]>();
+        const availablePaths = new Set<string>();
+        const collectAvailablePaths = (node: DtsNode) => {
+                availablePaths.add(node.path);
+                node.children.forEach(collectAvailablePaths);
+        };
+        collectAvailablePaths(root);
 
-	referenceEdges.forEach((edge) => {
-		const targetNode = nodeByPath.get(edge.target);
-		if (!targetNode) {
-			return;
-		}
-		if (!endpointPaths.has(targetNode.path)) {
-			return;
-		}
-		const list = portalTargetsBySource.get(edge.source);
-		if (list) {
-			if (!list.some((entry) => entry.path === targetNode.path)) {
-				list.push(targetNode);
-			}
-		} else {
-			portalTargetsBySource.set(edge.source, [targetNode]);
-		}
-	});
+        const portalTargetsBySource = new Map<string, DtsNode[]>();
 
-	const buildLayoutNode = (
-		node: DtsNode,
-		depth: number,
-		portalSourcePath: string | null,
-		visited: Set<string>,
-	): LayoutNode => {
-		const branchVisited = new Set(visited);
-		branchVisited.add(node.path);
+        referenceEdges.forEach((edge) => {
+                if (!availablePaths.has(edge.source)) {
+                        return;
+                }
+                const targetNode = nodeByPath.get(edge.target);
+                if (!targetNode) {
+                        return;
+                }
+                if (!endpointPaths.has(targetNode.path)) {
+                        return;
+                }
+                if (availablePaths.has(targetNode.path)) {
+                        return;
+                }
+                const list = portalTargetsBySource.get(edge.source);
+                if (list) {
+                        if (!list.some((entry) => entry.path === targetNode.path)) {
+                                list.push(targetNode);
+                        }
+                } else {
+                        portalTargetsBySource.set(edge.source, [targetNode]);
+                }
+        });
 
-		const layoutNode: LayoutNode = {
-			node,
-			depth,
-			x: 0,
-			y: 0,
-			angle: 0,
-			radius: depth * RADIAL_LAYER_GAP,
-			weight: 1,
-			portal: portalSourcePath !== null,
-			portalSourcePath,
-			children: [],
-		};
+        const buildLayoutNode = (
+                node: DtsNode,
+                depth: number,
+                portalSourcePath: string | null,
+                visited: Set<string>,
+        ): LayoutNode => {
+                const branchVisited = new Set(visited);
+                branchVisited.add(node.path);
 
-		const realChildren = node.children.map((child) =>
-			buildLayoutNode(child, depth + 1, null, branchVisited),
-		);
+                const layoutNode: LayoutNode = {
+                        node,
+                        depth,
+                        x: 0,
+                        y: 0,
+                        angle: 0,
+                        radius: 0,
+                        weight: 1,
+                        portal: portalSourcePath !== null,
+                        portalSourcePath,
+                        children: [],
+                };
 
-		const portalChildren: LayoutNode[] = [];
-		const portalTargets = portalTargetsBySource.get(node.path) ?? [];
-		portalTargets.forEach((target) => {
-			if (branchVisited.has(target.path)) {
-				return;
-			}
-			const portalVisited = new Set(branchVisited);
-			portalVisited.add(target.path);
-			const portalNode = buildLayoutNode(target, depth + 1, node.path, portalVisited);
-			portalNode.portal = true;
-			portalNode.portalSourcePath = node.path;
-			portalChildren.push(portalNode);
-		});
+                const realChildren = node.children.map((child) =>
+                        buildLayoutNode(child, depth + 1, null, branchVisited),
+                );
 
-		layoutNode.children = [...realChildren, ...portalChildren];
-		return layoutNode;
-	};
+                const portalChildren: LayoutNode[] = [];
+                const portalTargets = portalTargetsBySource.get(node.path) ?? [];
+                portalTargets.forEach((target) => {
+                        if (branchVisited.has(target.path)) {
+                                return;
+                        }
+                        const portalVisited = new Set(branchVisited);
+                        portalVisited.add(target.path);
+                        const portalNode = buildLayoutNode(target, depth + 1, node.path, portalVisited);
+                        portalNode.portal = true;
+                        portalNode.portalSourcePath = node.path;
+                        portalChildren.push(portalNode);
+                });
 
-	const rootLayout = buildLayoutNode(root, 0, null, new Set());
+                layoutNode.children = [...realChildren, ...portalChildren];
+                return layoutNode;
+        };
 
-	const computeWeights = (node: LayoutNode): number => {
-		if (!node.children.length) {
-			node.weight = 1;
-			return node.weight;
-		}
-		let total = 0;
-		node.children.forEach((child) => {
-			total += computeWeights(child);
-		});
-		node.weight = Math.max(total, 1);
-		return node.weight;
-	};
+        const rootLayout = buildLayoutNode(root, 0, null, new Set());
 
-	computeWeights(rootLayout);
+        const computeWeights = (node: LayoutNode): number => {
+                if (!node.children.length) {
+                        node.weight = 1;
+                        return node.weight;
+                }
+                let total = 0;
+                node.children.forEach((child) => {
+                        total += computeWeights(child);
+                });
+                node.weight = Math.max(total, 1);
+                return node.weight;
+        };
 
-	const updatePosition = (node: LayoutNode) => {
-		node.x = node.radius * Math.cos(node.angle) - NODE_WIDTH / 2;
-		node.y = node.radius * Math.sin(node.angle);
-	};
+        computeWeights(rootLayout);
 
-	const assignAngles = (node: LayoutNode, startAngle: number, endAngle: number) => {
-		if (node.depth === 0) {
-			node.angle = 0;
-		} else {
-			node.angle = (startAngle + endAngle) / 2;
-		}
-		node.radius = node.depth * RADIAL_LAYER_GAP;
-		updatePosition(node);
+        const assignCartesianPositions = (node: LayoutNode, state: { cursor: number }) => {
+                if (!node.children.length) {
+                        const centerX = state.cursor * HORIZONTAL_STEP;
+                        node.x = centerX - NODE_WIDTH / 2;
+                        node.y = node.depth * LAYER_VERTICAL_GAP + NODE_HEIGHT / 2;
+                        node.angle = 0;
+                        node.radius = node.y;
+                        state.cursor += 1;
+                        return;
+                }
 
-		if (!node.children.length) {
-			return;
-		}
+                node.children.forEach((child) => assignCartesianPositions(child, state));
 
-		const span = endAngle - startAngle;
-		const childRadius = (node.depth + 1) * RADIAL_LAYER_GAP;
-		const minArc = childRadius > 0 ? (NODE_WIDTH + NODE_GAP) / childRadius : 0;
-		const gaps = Math.max(0, node.children.length - 1);
-		const minRequiredSpan = minArc * gaps;
-		let workingStart = startAngle;
-		let workingEnd = endAngle;
-		if (span < minRequiredSpan) {
-			const expansion = (minRequiredSpan - span) / 2;
-			workingStart -= expansion;
-			workingEnd += expansion;
-		}
-		const workingSpan = workingEnd - workingStart;
-		const availableSpan = Math.max(0, workingSpan - minRequiredSpan);
-		const total = node.children.reduce((sum, child) => sum + child.weight, 0);
-		const safeTotal = total === 0 ? node.children.length || 1 : total;
-		let cursor = workingStart;
-		node.children.forEach((child, index) => {
-			const portion = (child.weight || 1) / safeTotal;
-			const childSpan = availableSpan * portion;
-			const childStart = cursor;
-			const childEnd = childStart + childSpan;
-			assignAngles(child, childStart, childEnd);
-			cursor = childEnd + (index < node.children.length - 1 ? minArc : 0);
-		});
-	};
+                const firstChild = node.children[0]!;
+                const lastChild = node.children[node.children.length - 1]!;
+                const firstCenter = firstChild.x + NODE_WIDTH / 2;
+                const lastCenter = lastChild.x + NODE_WIDTH / 2;
+                const centerX = (firstCenter + lastCenter) / 2;
+                node.x = centerX - NODE_WIDTH / 2;
+                node.y = node.depth * LAYER_VERTICAL_GAP + NODE_HEIGHT / 2;
+                node.angle = 0;
+                node.radius = node.y;
+        };
 
-	assignAngles(rootLayout, -Math.PI, Math.PI);
+        assignCartesianPositions(rootLayout, { cursor: 0 });
 
-		const resolveLayerOverlaps = (root: LayoutNode) => {
-			const layers = new Map<number, LayoutNode[]>();
-			const queue: LayoutNode[] = [root];
-			while (queue.length) {
-				const current = queue.pop()!;
-				const existing = layers.get(current.depth);
-				if (existing) {
-					existing.push(current);
-				} else {
-					layers.set(current.depth, [current]);
-				}
-				queue.push(...current.children);
-			}
-			layers.forEach((layer, depth) => {
-				if (depth === 0 || layer.length < 2) {
-					return;
-				}
-				const radius = depth * RADIAL_LAYER_GAP;
-				if (radius <= 0) {
-					return;
-				}
-				const marginX = NODE_GAP / 2;
-				const marginY = NODE_GAP / 2;
-				let sorted = [...layer].sort((a, b) => a.angle - b.angle);
-				const maxIterations = 12;
-				for (let iteration = 0; iteration < maxIterations; iteration += 1) {
-					let adjusted = false;
-					for (let index = 0; index < sorted.length - 1; index += 1) {
-						const current = sorted[index]!;
-						const next = sorted[index + 1]!;
-						const currentLeft = current.x - marginX;
-						const currentRight = current.x + NODE_WIDTH + marginX;
-						const currentTop = current.y - NODE_HEIGHT / 2 - marginY;
-						const currentBottom = current.y + NODE_HEIGHT / 2 + marginY;
-						const nextLeft = next.x - marginX;
-						const nextRight = next.x + NODE_WIDTH + marginX;
-						const nextTop = next.y - NODE_HEIGHT / 2 - marginY;
-						const nextBottom = next.y + NODE_HEIGHT / 2 + marginY;
-						const overlapsX = currentRight > nextLeft;
-						const overlapsY = currentBottom > nextTop && nextBottom > currentTop;
-						if (!overlapsX || !overlapsY) {
-							continue;
-						}
-						const overlap = currentRight - nextLeft;
-						const angleShift = overlap / radius;
-						current.angle -= angleShift / 2;
-						next.angle += angleShift / 2;
-						updatePosition(current);
-						updatePosition(next);
-						adjusted = true;
-					}
-					if (!adjusted) {
-						break;
-					}
-					sorted = [...layer].sort((a, b) => a.angle - b.angle);
-				}
-			});
-		};
+        const nodes: LayoutNode[] = [];
+        const collectNodes = (node: LayoutNode) => {
+                nodes.push(node);
+                node.children.forEach(collectNodes);
+        };
+        collectNodes(rootLayout);
 
-		resolveLayerOverlaps(rootLayout);
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
 
-	const nodes: LayoutNode[] = [];
-	const collectNodes = (node: LayoutNode) => {
-		nodes.push(node);
-		node.children.forEach(collectNodes);
-	};
-	collectNodes(rootLayout);
+        nodes.forEach((node) => {
+                minX = Math.min(minX, node.x);
+                maxX = Math.max(maxX, node.x + NODE_WIDTH);
+                minY = Math.min(minY, node.y - NODE_HEIGHT / 2);
+                maxY = Math.max(maxY, node.y + NODE_HEIGHT / 2);
+        });
 
-	let minX = Infinity;
-	let maxX = -Infinity;
-	let minY = Infinity;
-	let maxY = -Infinity;
+        if (!Number.isFinite(minX) || !Number.isFinite(maxX)) {
+                minX = -NODE_WIDTH / 2;
+                maxX = NODE_WIDTH / 2;
+        }
+        if (!Number.isFinite(minY) || !Number.isFinite(maxY)) {
+                minY = -NODE_HEIGHT / 2;
+                maxY = NODE_HEIGHT / 2;
+        }
 
-	nodes.forEach((node) => {
-		minX = Math.min(minX, node.x);
-		maxX = Math.max(maxX, node.x + NODE_WIDTH);
-		minY = Math.min(minY, node.y - NODE_HEIGHT / 2);
-		maxY = Math.max(maxY, node.y + NODE_HEIGHT / 2);
-	});
+        const bounds = { minX, maxX, minY, maxY };
+        const width = Math.max(1, maxX - minX + CANVAS_PADDING * 2);
+        const height = Math.max(1, maxY - minY + CANVAS_PADDING * 2);
+        const offset = {
+                x: CANVAS_PADDING - minX,
+                y: CANVAS_PADDING - minY,
+        };
 
-	if (!Number.isFinite(minX) || !Number.isFinite(maxX)) {
-		minX = -NODE_WIDTH / 2;
-		maxX = NODE_WIDTH / 2;
-	}
-	if (!Number.isFinite(minY) || !Number.isFinite(maxY)) {
-		minY = -NODE_HEIGHT / 2;
-		maxY = NODE_HEIGHT / 2;
-	}
-
-	const bounds = { minX, maxX, minY, maxY };
-	const width = Math.max(1, maxX - minX + CANVAS_PADDING * 2);
-	const height = Math.max(1, maxY - minY + CANVAS_PADDING * 2);
-	const offset = {
-		x: CANVAS_PADDING - minX,
-		y: CANVAS_PADDING - minY,
-	};
-
-	return {
-		root: rootLayout,
-		nodes,
-		bounds,
-		size: { width, height },
-		offset,
-	};
+        return {
+                root: rootLayout,
+                nodes,
+                bounds,
+                size: { width, height },
+                offset,
+        };
 };
 
 const prepareCanvas = (width: number, height: number) => {
@@ -1619,9 +1554,17 @@ const attachEventHandlers = () => {
 		clearSearch();
 	});
 
-	const dragState = {
-		enterDepth: 0,
-	};
+        window.addEventListener("resize", () => {
+                const layout = filteredLayout ?? currentLayout;
+                if (!layout) {
+                        return;
+                }
+                renderLayout(layout, selectedNodePath);
+        });
+
+        const dragState = {
+                enterDepth: 0,
+        };
 
 	const hasFiles = (event: DragEvent) =>
 		Array.from(event.dataTransfer?.types ?? []).includes("Files");
