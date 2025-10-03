@@ -1,13 +1,15 @@
 {
-  "name": "dtviewer",
-  "private": true,
-  "scripts": {
-    "bundle": "bun run scripts/bundle.ts"
-  },
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
-  }
+	"name": "dtviewer",
+	"private": true,
+	"scripts": {
+		"bundle": "bun run scripts/bundle.ts",
+		"format": "prettier --ignore-unknown --write ."
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"prettier": "^3.1.1"
+	},
+	"peerDependencies": {
+		"typescript": "^5"
+	}
 }
