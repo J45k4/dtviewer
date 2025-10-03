@@ -101,14 +101,13 @@ export const layoutTree = (
         }
     });
 
+    const visited = new Set<string>();
     const buildLayoutNode = (
         node: DtsNode,
         depth: number,
         portalSourcePath: string | null,
-        visited: Set<string>,
     ): LayoutNode => {
-        const branchVisited = new Set(visited);
-        branchVisited.add(node.path);
+        visited.add(node.path);
 
         const layoutNode: LayoutNode = {
             node,
@@ -125,29 +124,25 @@ export const layoutTree = (
             arcEnd: 0,
         };
 
-        const realChildren = node.children.map((child) =>
-            buildLayoutNode(child, depth + 1, null, branchVisited),
-        );
-
-        const portalChildren: LayoutNode[] = [];
-        const portalTargets = portalTargetsBySource.get(node.path) ?? [];
-        portalTargets.forEach((target) => {
-            if (branchVisited.has(target.path)) {
-                return;
-            }
-            const portalVisited = new Set(branchVisited);
-            portalVisited.add(target.path);
-            const portalNode = buildLayoutNode(target, depth + 1, node.path, portalVisited);
-            portalNode.portal = true;
-            portalNode.portalSourcePath = node.path;
-            portalChildren.push(portalNode);
+        node.children.forEach((child) => {
+            layoutNode.children.push(buildLayoutNode(child, depth + 1, null));
         });
 
-        layoutNode.children = [...realChildren, ...portalChildren];
+        const portalTargets = portalTargetsBySource.get(node.path);
+        if (portalTargets) {
+            portalTargets.forEach((target) => {
+                if (visited.has(target.path)) {
+                    return;
+                }
+                layoutNode.children.push(buildLayoutNode(target, depth + 1, node.path));
+            });
+        }
+
+        visited.delete(node.path);
         return layoutNode;
     };
 
-    const rootLayout = buildLayoutNode(root, 0, null, new Set());
+    const rootLayout = buildLayoutNode(root, 0, null);
 
     const computeWeights = (node: LayoutNode): number => {
         if (!node.children.length) {
