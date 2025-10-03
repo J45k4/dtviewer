@@ -382,11 +382,12 @@ const endpointPaths = new Set<string>();
 type ReferenceEdge = { source: string; target: string; viaProperty: string; kind: "phandle" | "label" };
 let referenceEdges: ReferenceEdge[] = [];
 const forcedVisiblePaths = new Set<string>();
+const forcedVisibilityAnchors = new Map<string, string | null>();
 const HANDLE_PROPERTY_NAMES = new Set([
-	"phandle",
-	"linux,phandle",
-	"remote-endpoint",
-	"remote-endpoints",
+        "phandle",
+        "linux,phandle",
+        "remote-endpoint",
+        "remote-endpoints",
 ]);
 
 const truncate = (value: string, max = 32): string => {
@@ -432,22 +433,33 @@ const getParentPath = (path: string): string | null => {
 	return parent ? parent : "/";
 };
 
-const ensureForcedVisibility = (path: string): boolean => {
-	if (!nodeByPath.has(path)) {
-		return false;
-	}
-	let changed = false;
-	let current: string | null = path;
-	while (current) {
-		if (!forcedVisiblePaths.has(current)) {
-			forcedVisiblePaths.add(current);
-			changed = true;
-		}
-		if (current === "/") {
-			break;
-		}
-		current = getParentPath(current);
-	}
+const ensureForcedVisibility = (path: string, anchorPath?: string | null): boolean => {
+        if (!nodeByPath.has(path)) {
+                return false;
+        }
+        let changed = false;
+        let current: string | null = path;
+        while (current) {
+                if (!forcedVisiblePaths.has(current)) {
+                        forcedVisiblePaths.add(current);
+                        changed = true;
+                }
+                if (!forcedVisibilityAnchors.has(current)) {
+                        forcedVisibilityAnchors.set(current, null);
+                }
+                if (current === path && anchorPath !== undefined) {
+                        const normalizedAnchor =
+                                anchorPath && anchorPath !== path ? anchorPath : null;
+                        if (forcedVisibilityAnchors.get(current) !== normalizedAnchor) {
+                                forcedVisibilityAnchors.set(current, normalizedAnchor);
+                                changed = true;
+                        }
+                }
+                if (current === "/") {
+                        break;
+                }
+                current = getParentPath(current);
+        }
 	return changed;
 };
 
@@ -650,17 +662,123 @@ const formatHandleNumber = (value: number): string =>
 	value >= 10 ? `0x${value.toString(16)}` : String(value);
 
 const findLayoutNodeByPath = (path: string, layout: LayoutResult | null): LayoutNode | null => {
-	if (!layout) {
-		return null;
-	}
-	return layout.nodes.find((node) => node.node.path === path) ?? null;
+        if (!layout) {
+                return null;
+        }
+        return layout.nodes.find((node) => node.node.path === path) ?? null;
+};
+
+const pruneForcedVisibilityAnchors = () => {
+        const stale: string[] = [];
+        forcedVisibilityAnchors.forEach((_, path) => {
+                if (!forcedVisiblePaths.has(path)) {
+                        stale.push(path);
+                }
+        });
+        stale.forEach((path) => forcedVisibilityAnchors.delete(path));
+};
+
+const recomputeLayoutMetrics = (layout: LayoutResult) => {
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+
+        layout.nodes.forEach((node) => {
+                minX = Math.min(minX, node.x);
+                maxX = Math.max(maxX, node.x + NODE_WIDTH);
+                minY = Math.min(minY, node.y - NODE_HEIGHT / 2);
+                maxY = Math.max(maxY, node.y + NODE_HEIGHT / 2);
+        });
+
+        if (!Number.isFinite(minX) || !Number.isFinite(maxX)) {
+                minX = -NODE_WIDTH / 2;
+                maxX = NODE_WIDTH / 2;
+        }
+        if (!Number.isFinite(minY) || !Number.isFinite(maxY)) {
+                minY = -NODE_HEIGHT / 2;
+                maxY = NODE_HEIGHT / 2;
+        }
+
+        layout.bounds = { minX, maxX, minY, maxY };
+        layout.size = {
+                width: Math.max(1, maxX - minX + CANVAS_PADDING * 2),
+                height: Math.max(1, maxY - minY + CANVAS_PADDING * 2),
+        };
+        layout.offset = {
+                x: CANVAS_PADDING - minX,
+                y: CANVAS_PADDING - minY,
+        };
+};
+
+const anchorForcedNodesNearSource = (
+        layout: LayoutResult,
+        anchors: Map<string, string | null>,
+) => {
+        if (!anchors.size) {
+                return;
+        }
+
+        const nodesByPath = new Map<string, LayoutNode>();
+        layout.nodes.forEach((node) => {
+                nodesByPath.set(node.node.path, node);
+        });
+
+        const buckets = new Map<string, LayoutNode[]>();
+        anchors.forEach((anchorPath, forcedPath) => {
+                if (!anchorPath) {
+                        return;
+                }
+                const anchorNode = nodesByPath.get(anchorPath);
+                const forcedNode = nodesByPath.get(forcedPath);
+                if (!anchorNode || !forcedNode) {
+                        return;
+                }
+                const list = buckets.get(anchorPath);
+                if (list) {
+                        list.push(forcedNode);
+                } else {
+                        buckets.set(anchorPath, [forcedNode]);
+                }
+        });
+
+        buckets.forEach((nodes, anchorPath) => {
+                const anchorNode = nodesByPath.get(anchorPath);
+                if (!anchorNode) {
+                        return;
+                }
+                const total = nodes.length;
+                if (!total) {
+                        return;
+                }
+                const anchorCenterX = anchorNode.x + NODE_WIDTH / 2;
+                const anchorCenterY = anchorNode.y;
+                const spread = Math.PI / 1.5;
+                const step = total === 1 ? 0 : spread / Math.max(total - 1, 1);
+                const start = total === 1 ? 0 : -spread / 2;
+                const radius = Math.max(NODE_WIDTH, NODE_HEIGHT) + NODE_GAP;
+                nodes.forEach((node, index) => {
+                        const angleOffset = start + step * index;
+                        const targetCenterX = anchorCenterX + Math.cos(angleOffset) * radius;
+                        const targetCenterY = anchorCenterY + Math.sin(angleOffset) * radius;
+                        node.x = targetCenterX - NODE_WIDTH / 2;
+                        node.y = targetCenterY;
+                        node.portal = true;
+                        node.portalSourcePath = anchorNode.node.path;
+                        node.angle = Math.atan2(targetCenterY, targetCenterX);
+                        node.radius = Math.hypot(targetCenterX, targetCenterY);
+                        node.depth = Math.max(anchorNode.depth + 1, node.depth);
+                });
+        });
+
+        recomputeLayoutMetrics(layout);
 };
 
 const getConnectedEndpointPaths = (path: string): string[] => {
-	const results = new Set<string>();
-	referenceEdges.forEach((edge) => {
-		if (edge.source === path) {
-			results.add(edge.target);
+        const results = new Set<string>();
+        referenceEdges.forEach((edge) => {
+                if (edge.source === path) {
+                        results.add(edge.target);
 			return;
 		}
 		if (edge.target === path) {
@@ -682,8 +800,12 @@ const focusNodeByPath = (path: string) => {
                 const currentlyVisible =
                         filteredLayout?.nodes.some((node) => node.node.path === path) ?? false;
                 if (!currentlyVisible) {
-                        ensureForcedVisibility(path);
-                        shouldAutoFitView = true;
+                        const anchorPath =
+                                selectedNodePath && selectedNodePath !== path
+                                        ? selectedNodePath
+                                        : null;
+                        ensureForcedVisibility(path, anchorPath);
+                        shouldAutoFitView = false;
                         applyFilters();
                 }
         }
@@ -1177,6 +1299,7 @@ const displayTree = (source: string, origin: string) => {
         filteredLayout = null;
         filteredNodes = [];
         forcedVisiblePaths.clear();
+        forcedVisibilityAnchors.clear();
         if (searchInput) {
                 searchInput.value = "";
         }
@@ -1386,35 +1509,47 @@ const filterDtsTree = (
 };
 
 const buildFilteredLayout = (
-	root: DtsNode | null,
-	normalized: string,
-	statusFilter: StatusFilter,
-	forced: Set<string>,
+        root: DtsNode | null,
+        normalized: string,
+        statusFilter: StatusFilter,
+        forced: Set<string>,
+        anchors: Map<string, string | null>,
 ): LayoutResult | null => {
-	if (!root) {
-		return null;
-	}
-	if (!normalized && statusFilter === "all") {
-		return null;
-	}
+        if (!root) {
+                return null;
+        }
+        if (!normalized && statusFilter === "all") {
+                return null;
+        }
 
-	const filteredRoot = filterDtsTree(root, normalized, statusFilter, forced);
-	if (!filteredRoot) {
-		return null;
-	}
+        const filteredRoot = filterDtsTree(root, normalized, statusFilter, forced);
+        if (!filteredRoot) {
+                return null;
+        }
 
-        return buildLayout(filteredRoot);
+        const layout = buildLayout(filteredRoot);
+        anchorForcedNodesNearSource(layout, anchors);
+        return layout;
 };
 
 const applyFilters = () => {
-	const normalized = activeFilterNormalized;
-	const statusFilter = activeStatusFilter;
-	const hasActiveFilters = Boolean(normalized) || statusFilter !== "all";
-	if (!hasActiveFilters) {
-		forcedVisiblePaths.clear();
-	}
-	filteredLayout = buildFilteredLayout(currentRoot, normalized, statusFilter, forcedVisiblePaths);
-	filteredNodes = filteredLayout?.nodes ?? [];
+        const normalized = activeFilterNormalized;
+        const statusFilter = activeStatusFilter;
+        const hasActiveFilters = Boolean(normalized) || statusFilter !== "all";
+        if (!hasActiveFilters) {
+                forcedVisiblePaths.clear();
+                forcedVisibilityAnchors.clear();
+        } else {
+                pruneForcedVisibilityAnchors();
+        }
+        filteredLayout = buildFilteredLayout(
+                currentRoot,
+                normalized,
+                statusFilter,
+                forcedVisiblePaths,
+                forcedVisibilityAnchors,
+        );
+        filteredNodes = filteredLayout?.nodes ?? [];
 
 	if (hasActiveFilters) {
 		const currentNodes = filteredNodes;
@@ -1488,6 +1623,7 @@ const applySearch = (query: string) => {
         const changed = normalized !== activeFilterNormalized || query !== activeFilterRaw;
         if (changed) {
                 forcedVisiblePaths.clear();
+                forcedVisibilityAnchors.clear();
                 shouldAutoFitView = true;
         }
         activeFilterRaw = query;
@@ -1499,6 +1635,7 @@ const clearSearch = () => {
         activeFilterRaw = "";
         activeFilterNormalized = "";
         forcedVisiblePaths.clear();
+        forcedVisibilityAnchors.clear();
         if (searchInput) {
                 searchInput.value = "";
         }
@@ -1554,6 +1691,7 @@ const attachEventHandlers = () => {
                 const value = statusFilterSelect.value;
                 activeStatusFilter = value === "disabled" ? "disabled" : value === "okay" ? "okay" : "all";
                 forcedVisiblePaths.clear();
+                forcedVisibilityAnchors.clear();
                 shouldAutoFitView = true;
                 applyFilters();
         });
