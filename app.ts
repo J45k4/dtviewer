@@ -1,27 +1,17 @@
 import { dtsPare } from "./dts";
 import type { DtsNode, DtsProperty, DtsValue } from "./dts";
-
-type LayoutNode = {
-	node: DtsNode;
-	depth: number;
-	x: number;
-	y: number;
-	angle: number;
-	radius: number;
-	weight: number;
-	portal: boolean;
-	portalSourcePath: string | null;
-	children: LayoutNode[];
-};
+import {
+        CANVAS_PADDING,
+        NODE_GAP,
+        NODE_HEIGHT,
+        NODE_WIDTH,
+        layoutTree as radialLayout,
+        type LayoutNode,
+        type LayoutResult,
+        type ReferenceEdge,
+} from "./layout";
 
 type StatusFilter = "all" | "okay" | "disabled";
-
-const NODE_WIDTH = 180;
-const NODE_HEIGHT = 48;
-const NODE_GAP = 24;
-const CANVAS_PADDING = 48;
-const HORIZONTAL_STEP = NODE_WIDTH + NODE_GAP;
-const LAYER_VERTICAL_GAP = NODE_HEIGHT + NODE_GAP * 2;
 
 const fileInput = document.querySelector<HTMLInputElement>("#dts-input");
 const sampleButton = document.querySelector<HTMLButtonElement>("#load-sample");
@@ -44,67 +34,135 @@ const ctx = canvas?.getContext("2d");
 
 const SAMPLE_DTS = `
 / {
-	model = "Sample i.MX8 Board";
-	chosen {
-		bootargs = "console=ttyS0,115200";
-	};
+        model = "Sample i.MX8 Board";
+        compatible = "fsl,imx8mp";
 
-	usb@32f10108 {
-		compatible = "fsl,imx8mp-dwc3";
-		phandle = <0x83>;
-		clocks = <0x2 0x10c 0x2 0x140>;
-		clock-names = "hsio", "suspend";
-		interrupts = <0x0 0x95 0x4>;
-		ranges;
-		status = "okay";
+        chosen {
+                bootargs = "console=ttyS0,115200 earlycon";
+                stdout-path = &uart3;
+        };
 
-		usb@38200000 {
-			compatible = "snps,dwc3";
-			phys = <0x83 0x83>;
-			phy-names = "usb2-phy", "usb3-phy";
-			dr_mode = "host";
-			status = "okay";
-		};
-	};
+        aliases {
+                ethernet0 = &fec1;
+                i2c0 = &i2c1;
+        };
 
-	ldb-display-controller {
-		lvds-channel@0 {
-			port@0 {
-				endpoint {
-					remote-endpoint = <0x85>;
-					phandle = <0x5f>;
-				};
-			};
+        memory@40000000 {
+                device_type = "memory";
+                reg = <0x40000000 0x40000000>;
+        };
 
-			port@1 {
-				endpoint {
-					remote-endpoint = <0x86>;
-					phandle = <0xa2>;
-				};
-			};
-		};
-	};
+        soc@0 {
+                #address-cells = <0x1>;
+                #size-cells = <0x1>;
+                compatible = "simple-bus";
+                ranges;
+
+                uart3: serial@30890000 {
+                        compatible = "fsl,imx8mp-uart", "fsl,imx21-uart";
+                        reg = <0x30890000 0x1000>;
+                        interrupts = <0x0 0x37 0x4>;
+                        clocks = <0x2 0x19>;
+                        status = "okay";
+                };
+
+                i2c1: i2c@30a20000 {
+                        compatible = "fsl,imx8mp-i2c", "fsl,imx21-i2c";
+                        reg = <0x30a20000 0x10000>;
+                        interrupts = <0x0 0x24 0x4>;
+                        clocks = <0x2 0x7d>;
+                        status = "okay";
+
+                        temperature-sensor@48 {
+                                compatible = "ti,tmp102";
+                                reg = <0x48>;
+                                status = "okay";
+                        };
+
+                        touchscreen@4a {
+                                compatible = "edt,edt-ft5406";
+                                reg = <0x4a>;
+                                interrupt-parent = <0x2>;
+                                interrupts = <0x6a 0x1>;
+                                reset-gpios = <0x3 0x1f 0x1>;
+                                status = "okay";
+                        };
+                };
+
+                fec1: ethernet@30be0000 {
+                        compatible = "fsl,imx8mp-fec";
+                        reg = <0x30be0000 0x10000>;
+                        phy-handle = <0xa1>;
+                        phy-mode = "rgmii-id";
+                        status = "okay";
+                };
+
+                gpu@38000000 {
+                        compatible = "vivante,gc7000";
+                        reg = <0x38000000 0x40000>;
+                        interrupts = <0x0 0x94 0x4>;
+                        status = "okay";
+                };
+
+                ldb-display-controller {
+                        lvds-channel@0 {
+                                port@0 {
+                                        endpoint {
+                                                remote-endpoint = <0x85>;
+                                                phandle = <0x5f>;
+                                        };
+                                };
+
+                                port@1 {
+                                        endpoint {
+                                                remote-endpoint = <0x86>;
+                                                phandle = <0xa2>;
+                                        };
+                                };
+                        };
+                };
+        };
+
+        backlight: backlight@0 {
+                compatible = "pwm-backlight";
+                pwms = <0x7 0x0 0x3e8 0x0>;
+                brightness-levels = <0x0 0x1e 0x3c 0x64 0x96 0xc8 0xff>;
+                default-brightness-level = <0x3>;
+                status = "okay";
+        };
+
+        panel@0 {
+                compatible = "panel-lvds";
+                backlight = <0xa1>;
+                status = "okay";
+
+                port {
+                        panel_in: endpoint@0 {
+                                remote-endpoint = <0x5f>;
+                                phandle = <0x85>;
+                        };
+                };
+        };
+
+        usb@32f10108 {
+                compatible = "fsl,imx8mp-dwc3";
+                phandle = <0x83>;
+                clocks = <0x2 0x10c 0x2 0x140>;
+                clock-names = "hsio", "suspend";
+                interrupts = <0x0 0x95 0x4>;
+                ranges;
+                status = "okay";
+
+                usb@38200000 {
+                        compatible = "snps,dwc3";
+                        phys = <0x83 0x83>;
+                        phy-names = "usb2-phy", "usb3-phy";
+                        dr_mode = "host";
+                        status = "okay";
+                };
+        };
 };
 `;
-
-type LayoutResult = {
-	root: LayoutNode;
-	nodes: LayoutNode[];
-	bounds: {
-		minX: number;
-		maxX: number;
-		minY: number;
-		maxY: number;
-	};
-	size: {
-		width: number;
-		height: number;
-	};
-	offset: {
-		x: number;
-		y: number;
-	};
-};
 
 let currentLayout: LayoutResult | null = null;
 let currentRoot: DtsNode | null = null;
@@ -654,171 +712,12 @@ const updateStatus = (
 	lastStatus = { origin, nodeCount, errors: [...errors], warnings: [...warnings] };
 };
 
-const layoutTree = (root: DtsNode): LayoutResult => {
-        const availablePaths = new Set<string>();
-        const collectAvailablePaths = (node: DtsNode) => {
-                availablePaths.add(node.path);
-                node.children.forEach(collectAvailablePaths);
-        };
-        collectAvailablePaths(root);
-
-        const portalTargetsBySource = new Map<string, DtsNode[]>();
-
-        referenceEdges.forEach((edge) => {
-                if (!availablePaths.has(edge.source)) {
-                        return;
-                }
-                const targetNode = nodeByPath.get(edge.target);
-                if (!targetNode) {
-                        return;
-                }
-                if (!endpointPaths.has(targetNode.path)) {
-                        return;
-                }
-                if (availablePaths.has(targetNode.path)) {
-                        return;
-                }
-                const list = portalTargetsBySource.get(edge.source);
-                if (list) {
-                        if (!list.some((entry) => entry.path === targetNode.path)) {
-                                list.push(targetNode);
-                        }
-                } else {
-                        portalTargetsBySource.set(edge.source, [targetNode]);
-                }
+const buildLayout = (root: DtsNode): LayoutResult =>
+        radialLayout(root, {
+                referenceEdges,
+                endpointPaths,
+                nodeLookup: nodeByPath,
         });
-
-        const buildLayoutNode = (
-                node: DtsNode,
-                depth: number,
-                portalSourcePath: string | null,
-                visited: Set<string>,
-        ): LayoutNode => {
-                const branchVisited = new Set(visited);
-                branchVisited.add(node.path);
-
-                const layoutNode: LayoutNode = {
-                        node,
-                        depth,
-                        x: 0,
-                        y: 0,
-                        angle: 0,
-                        radius: 0,
-                        weight: 1,
-                        portal: portalSourcePath !== null,
-                        portalSourcePath,
-                        children: [],
-                };
-
-                const realChildren = node.children.map((child) =>
-                        buildLayoutNode(child, depth + 1, null, branchVisited),
-                );
-
-                const portalChildren: LayoutNode[] = [];
-                const portalTargets = portalTargetsBySource.get(node.path) ?? [];
-                portalTargets.forEach((target) => {
-                        if (branchVisited.has(target.path)) {
-                                return;
-                        }
-                        const portalVisited = new Set(branchVisited);
-                        portalVisited.add(target.path);
-                        const portalNode = buildLayoutNode(target, depth + 1, node.path, portalVisited);
-                        portalNode.portal = true;
-                        portalNode.portalSourcePath = node.path;
-                        portalChildren.push(portalNode);
-                });
-
-                layoutNode.children = [...realChildren, ...portalChildren];
-                return layoutNode;
-        };
-
-        const rootLayout = buildLayoutNode(root, 0, null, new Set());
-
-        const computeWeights = (node: LayoutNode): number => {
-                if (!node.children.length) {
-                        node.weight = 1;
-                        return node.weight;
-                }
-                let total = 0;
-                node.children.forEach((child) => {
-                        total += computeWeights(child);
-                });
-                node.weight = Math.max(total, 1);
-                return node.weight;
-        };
-
-        computeWeights(rootLayout);
-
-        const assignCartesianPositions = (node: LayoutNode, state: { cursor: number }) => {
-                if (!node.children.length) {
-                        const centerX = state.cursor * HORIZONTAL_STEP;
-                        node.x = centerX - NODE_WIDTH / 2;
-                        node.y = node.depth * LAYER_VERTICAL_GAP + NODE_HEIGHT / 2;
-                        node.angle = 0;
-                        node.radius = node.y;
-                        state.cursor += 1;
-                        return;
-                }
-
-                node.children.forEach((child) => assignCartesianPositions(child, state));
-
-                const firstChild = node.children[0]!;
-                const lastChild = node.children[node.children.length - 1]!;
-                const firstCenter = firstChild.x + NODE_WIDTH / 2;
-                const lastCenter = lastChild.x + NODE_WIDTH / 2;
-                const centerX = (firstCenter + lastCenter) / 2;
-                node.x = centerX - NODE_WIDTH / 2;
-                node.y = node.depth * LAYER_VERTICAL_GAP + NODE_HEIGHT / 2;
-                node.angle = 0;
-                node.radius = node.y;
-        };
-
-        assignCartesianPositions(rootLayout, { cursor: 0 });
-
-        const nodes: LayoutNode[] = [];
-        const collectNodes = (node: LayoutNode) => {
-                nodes.push(node);
-                node.children.forEach(collectNodes);
-        };
-        collectNodes(rootLayout);
-
-        let minX = Infinity;
-        let maxX = -Infinity;
-        let minY = Infinity;
-        let maxY = -Infinity;
-
-        nodes.forEach((node) => {
-                minX = Math.min(minX, node.x);
-                maxX = Math.max(maxX, node.x + NODE_WIDTH);
-                minY = Math.min(minY, node.y - NODE_HEIGHT / 2);
-                maxY = Math.max(maxY, node.y + NODE_HEIGHT / 2);
-        });
-
-        if (!Number.isFinite(minX) || !Number.isFinite(maxX)) {
-                minX = -NODE_WIDTH / 2;
-                maxX = NODE_WIDTH / 2;
-        }
-        if (!Number.isFinite(minY) || !Number.isFinite(maxY)) {
-                minY = -NODE_HEIGHT / 2;
-                maxY = NODE_HEIGHT / 2;
-        }
-
-        const bounds = { minX, maxX, minY, maxY };
-        const width = Math.max(1, maxX - minX + CANVAS_PADDING * 2);
-        const height = Math.max(1, maxY - minY + CANVAS_PADDING * 2);
-        const offset = {
-                x: CANVAS_PADDING - minX,
-                y: CANVAS_PADDING - minY,
-        };
-
-        return {
-                root: rootLayout,
-                nodes,
-                bounds,
-                size: { width, height },
-                offset,
-        };
-};
 
 const prepareCanvas = (width: number, height: number) => {
 	if (!canvas || !ctx) {
@@ -1035,7 +934,7 @@ const displayTree = (source: string, origin: string) => {
 	}
 
 	currentRoot = result.root;
-	currentLayout = layoutTree(result.root);
+        currentLayout = buildLayout(result.root);
 	selectedNodePath = null;
 	selectedNode = null;
 	activeFilterRaw = "";
@@ -1269,7 +1168,7 @@ const buildFilteredLayout = (
 		return null;
 	}
 
-	return layoutTree(filteredRoot);
+        return buildLayout(filteredRoot);
 };
 
 const applyFilters = () => {
