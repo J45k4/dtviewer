@@ -15,7 +15,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.event.pull_request.number) || format('pages-ref-{0}', replace(github.ref_name, '/', '-')) }}
+  group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.event.pull_request.number) || format('pages-ref-{0}', github.ref) }}
   cancel-in-progress: false
 
 jobs:
