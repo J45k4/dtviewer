@@ -26,11 +26,33 @@ if (!(await indexSource.exists())) {
 }
 
 const html = await indexSource.text();
-const rewrittenHtml = html.replace(/src=["'][.\\/]*app\.ts["']/g, 'src="./app.js"');
 
-if (rewrittenHtml === html) {
-    console.warn("No <script> tag referencing app.ts found in index.html; written file unchanged");
+const bundlePath = join(outDir, "app.js");
+const bundleFile = Bun.file(bundlePath);
+if (!(await bundleFile.exists())) {
+    console.error(`Bundled script not found at ${bundlePath}`);
+    process.exit(1);
+}
+
+const bundledScript = await bundleFile.text();
+const escapedScript = bundledScript.replace(/<\/script>/g, "<\\/script>");
+const scriptPattern = /<script([^>]*?)\bsrc=["'][^"']*app\.(?:ts|js)["']([^>]*)>\s*<\/script>/i;
+
+const finalHtml = html.replace(scriptPattern, (match, preAttrs = "", postAttrs = "") => {
+    const attributeSource = `${preAttrs}${postAttrs}`;
+    const withoutSrc = attributeSource.replace(/\s*src\s*=\s*["'][^"']*["']/i, "");
+    const normalizedAttrs = withoutSrc.replace(/\s+/g, " ").trim();
+    const attributeSuffix = normalizedAttrs ? ` ${normalizedAttrs}` : "";
+    return `<script${attributeSuffix}>\n${escapedScript}\n</script>`;
+});
+
+if (finalHtml === html) {
+    console.warn("No <script> tag referencing app.ts or app.js found in index.html; script not inlined");
 }
 
 await mkdir(outDir, { recursive: true });
-await writeFile(join(outDir, "index.html"), rewrittenHtml);
+await writeFile(join(outDir, "index.html"), finalHtml);
+
+if (finalHtml !== html) {
+    await rm(bundlePath, { force: true });
+}
