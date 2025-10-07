@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "fs";
 import { dtsPare } from "./dts";
 import type { DtsNode, DtsProperty } from "./dts";
 
 const findNode = (root: DtsNode, path: string): DtsNode | undefined => {
-	if (root.path === path) {
-		return root;
-	}
-	for (const child of root.children) {
+        if (root.path === path) {
+                return root;
+        }
+        for (const child of root.children) {
 		const found = findNode(child, path);
 		if (found) {
 			return found;
@@ -16,7 +17,21 @@ const findNode = (root: DtsNode, path: string): DtsNode | undefined => {
 };
 
 const getProperty = (node: DtsNode, name: string): DtsProperty | undefined =>
-	node.properties.find((prop) => prop.name === name);
+        node.properties.find((prop) => prop.name === name);
+
+const findProperty = (node: DtsNode, name: string): DtsProperty | undefined => {
+        const direct = node.properties.find((prop) => prop.name === name);
+        if (direct) {
+                return direct;
+        }
+        for (const child of node.children) {
+                const found = findProperty(child, name);
+                if (found) {
+                        return found;
+                }
+        }
+        return undefined;
+};
 
 describe("dtsPare", () => {
 	test("parses nested device tree node with mixed property types", () => {
@@ -96,8 +111,8 @@ describe("dtsPare", () => {
 		expect(result.errors[0]).toMatch(/Unclosed node/);
 	});
 
-	test("captures remote-endpoint and phandle references", () => {
-		const snippet = `
+        test("captures remote-endpoint and phandle references", () => {
+                const snippet = `
 / {
   ldb-display-controller {
     lvds-channel@0 {
@@ -151,6 +166,58 @@ describe("dtsPare", () => {
 			const phandle = getProperty(endpoint!, "phandle");
 			expect(phandle?.type).toBe("cell-list");
 			expect(phandle?.value).toEqual([[0x5f], [0xa2], [0x60]][index]);
-		});
-	});
+                });
+        });
+
+        test("parses rsb3720a2 example and keeps brightness levels numeric", () => {
+                const payload = readFileSync(
+                        new URL("./examples/rsb3720a2.dts", import.meta.url),
+                        "utf8",
+                );
+                const result = dtsPare(payload);
+
+                expect(result.errors).toEqual([]);
+
+                const brightnessProperty = findProperty(result.root, "brightness-levels");
+                expect(brightnessProperty).toBeDefined();
+                expect(brightnessProperty?.type).toBe("cell-list");
+
+                const flattened: number[] = [];
+                const inspect = (value: unknown) => {
+                        if (Array.isArray(value)) {
+                                value.forEach(inspect);
+                                return;
+                        }
+                        if (typeof value === "number") {
+                                flattened.push(value);
+                        }
+                        if (value && typeof value === "object" && "ref" in value) {
+                                throw new Error("brightness-levels should not contain references");
+                        }
+                };
+
+                inspect(brightnessProperty!.value as unknown);
+                expect(flattened.length).toBeGreaterThan(0);
+                expect(flattened.every((entry) => typeof entry === "number")).toBe(true);
+                expect(flattened[0]).toBe(0);
+                expect(flattened[flattened.length - 1]).toBe(0x64);
+        });
+
+        test("parses rk3588 example and surfaces overlay diagnostics", () => {
+                const payload = readFileSync(
+                        new URL("./examples/rk3588-evb1-v10.dts", import.meta.url),
+                        "utf8",
+                );
+                const result = dtsPare(payload);
+
+                expect(result.errors.length).toBeGreaterThan(0);
+                expect(
+                        result.errors.some((message) =>
+                                message.includes("Malformed node declaration"),
+                        ),
+                ).toBe(true);
+
+                const modelProp = findProperty(result.root, "model");
+                expect(modelProp?.value).toBe("Rockchip RK3588 EVB1 V10 Board");
+        });
 });

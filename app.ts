@@ -437,16 +437,18 @@ type PropertyReference = {
 };
 
 const collectPropertyReferences = (
-	property: DtsProperty,
+        property: DtsProperty,
 ): PropertyReference[] => {
-	const references: PropertyReference[] = [];
-	const seen = new Set<string>();
-	const nameLower = property.name.toLowerCase();
-	const allowNumeric =
-		HANDLE_PROPERTY_NAMES.has(nameLower) ||
-		property.type === "cell-list" ||
-		property.type === "number" ||
-		property.type === "mixed";
+        const references: PropertyReference[] = [];
+        const seen = new Set<string>();
+        const nameLower = property.name.toLowerCase();
+        const raw = property.raw ?? "";
+        const containsExplicitLabel = /&[A-Za-z_][\w.-]*/.test(raw);
+        const allowNumeric =
+                HANDLE_PROPERTY_NAMES.has(nameLower) ||
+                containsExplicitLabel ||
+                property.type === "number" ||
+                property.type === "mixed";
 
 	const addReference = (
 		target: DtsNode,
