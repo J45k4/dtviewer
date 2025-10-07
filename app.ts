@@ -36,17 +36,21 @@ const warningsToggleLabel = document.querySelector<HTMLLabelElement>(
 	"#warnings-toggle-label",
 );
 const warningsPanel = document.querySelector<HTMLPreElement>("#warnings-panel");
+const registerMapPanel = document.querySelector<HTMLElement>("#register-map-panel");
+const registerMapToggle = document.querySelector<HTMLButtonElement>(
+        "#register-map-toggle",
+);
 const registerMapStatus = document.querySelector<HTMLParagraphElement>(
-	"#register-map-status",
+        "#register-map-status",
 );
 const registerMapTrack = document.querySelector<HTMLDivElement>(
-	"#register-map-track",
+        "#register-map-track",
 );
 const registerMapLegend = document.querySelector<HTMLDivElement>(
-	"#register-map-legend",
+        "#register-map-legend",
 );
 const registerMapAxis =
-	document.querySelector<HTMLDivElement>("#register-map-axis");
+        document.querySelector<HTMLDivElement>("#register-map-axis");
 
 const ctx = canvas?.getContext("2d");
 
@@ -940,6 +944,7 @@ const REGISTER_COLOR_PALETTE = [
 
 let registerRanges: RegisterRange[] = [];
 const registerColorByPath = new Map<string, string>();
+let isRegisterMapExpanded = false;
 
 const formatBigIntHex = (value: bigint): string => `0x${value.toString(16)}`;
 
@@ -1011,15 +1016,29 @@ const getNumericPropertyValue = (
 };
 
 const getRegisterColor = (path: string): string => {
-	let color = registerColorByPath.get(path);
-	if (!color) {
-		color =
-			REGISTER_COLOR_PALETTE[
-				registerColorByPath.size % REGISTER_COLOR_PALETTE.length
-			] ?? "#1d4ed8";
-		registerColorByPath.set(path, color);
-	}
-	return color;
+        let color = registerColorByPath.get(path);
+        if (!color) {
+                color =
+                        REGISTER_COLOR_PALETTE[
+                                registerColorByPath.size % REGISTER_COLOR_PALETTE.length
+                        ] ?? "#1d4ed8";
+                registerColorByPath.set(path, color);
+        }
+        return color;
+};
+
+const setRegisterMapExpansion = (expanded: boolean) => {
+        isRegisterMapExpanded = expanded;
+        registerMapPanel?.classList.toggle("collapsed", !expanded);
+        if (registerMapToggle) {
+                registerMapToggle.textContent = expanded
+                        ? "Hide register map"
+                        : "Show register map";
+                registerMapToggle.setAttribute(
+                        "aria-expanded",
+                        expanded ? "true" : "false",
+                );
+        }
 };
 
 const renderRegisterMap = () => {
@@ -1037,16 +1056,21 @@ const renderRegisterMap = () => {
 	registerMapAxis.innerHTML = "";
 
 	const hasRanges = registerRanges.length > 0;
-	registerMapTrack.classList.toggle("hidden", !hasRanges);
-	registerMapLegend.classList.toggle("hidden", !hasRanges);
-	registerMapAxis.classList.toggle("hidden", !hasRanges);
+        registerMapTrack.classList.toggle("hidden", !hasRanges);
+        registerMapLegend.classList.toggle("hidden", !hasRanges);
+        registerMapAxis.classList.toggle("hidden", !hasRanges);
 
-	if (!hasRanges) {
-		registerMapStatus.textContent = currentRoot
-			? "No register ranges detected in this tree."
-			: "Load a DTS file to view its register map.";
-		return;
-	}
+        if (registerMapToggle) {
+                registerMapToggle.disabled = !hasRanges;
+        }
+
+        if (!hasRanges) {
+                setRegisterMapExpansion(false);
+                registerMapStatus.textContent = currentRoot
+                        ? "No register ranges detected in this tree."
+                        : "Load a DTS file to view its register map.";
+                return;
+        }
 
 	const minBase = registerRanges.reduce(
 		(min, range) => (range.base < min ? range.base : min),
@@ -2091,11 +2115,11 @@ const handleFileSelection = async (file: File) => {
 };
 
 const attachEventHandlers = () => {
-	if (fileInput) {
-		fileInput.addEventListener("change", async () => {
-			const file = fileInput.files?.[0];
-			if (!file) {
-				return;
+        if (fileInput) {
+                fileInput.addEventListener("change", async () => {
+                        const file = fileInput.files?.[0];
+                        if (!file) {
+                                return;
 			}
 
 			try {
@@ -2113,15 +2137,19 @@ const attachEventHandlers = () => {
 		});
 	}
 
-	sampleButton?.addEventListener("click", () => {
-		displayTree(SAMPLE_DTS, "Sample DTS");
-	});
+        sampleButton?.addEventListener("click", () => {
+                displayTree(SAMPLE_DTS, "Sample DTS");
+        });
 
-	warningsToggle?.addEventListener("change", () => {
-		renderWarningsPanel();
-		if (lastStatus) {
-			updateStatus(
-				lastStatus.origin,
+        registerMapToggle?.addEventListener("click", () => {
+                setRegisterMapExpansion(!isRegisterMapExpanded);
+        });
+
+        warningsToggle?.addEventListener("change", () => {
+                renderWarningsPanel();
+                if (lastStatus) {
+                        updateStatus(
+                                lastStatus.origin,
 				lastStatus.nodeCount,
 				lastStatus.errors,
 				lastStatus.warnings,
@@ -2404,6 +2432,8 @@ const attachEventHandlers = () => {
 		}
 	});
 };
+
+setRegisterMapExpansion(false);
 
 if (!ctx) {
 	statusElement?.classList.add("error");

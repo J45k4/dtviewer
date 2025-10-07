@@ -295,42 +295,90 @@
 				border-bottom: none;
 			}
 
-			#register-map-panel {
-				margin-top: 1.25rem;
-				border: 1px solid rgba(128, 128, 128, 0.35);
-				border-radius: 8px;
-				padding: 1rem 1.25rem;
-				background: rgba(248, 250, 252, 0.75);
-				display: flex;
-				flex-direction: column;
-				gap: 0.75rem;
-			}
+                        #register-map-panel {
+                                margin-top: 1.25rem;
+                                border: 1px solid rgba(128, 128, 128, 0.35);
+                                border-radius: 8px;
+                                padding: 1rem 1.25rem;
+                                background: rgba(248, 250, 252, 0.75);
+                                display: flex;
+                                flex-direction: column;
+                                gap: 0.75rem;
+                        }
 
-			#register-map-panel h2 {
-				margin: 0;
-				font-size: 1.05rem;
-			}
+                        #register-map-panel h2 {
+                                margin: 0;
+                                font-size: 1.05rem;
+                        }
 
-			#register-map-panel .panel-header {
-				display: flex;
-				flex-wrap: wrap;
-				gap: 0.65rem;
-				align-items: baseline;
-				justify-content: space-between;
-			}
+                        #register-map-panel .panel-header {
+                                display: flex;
+                                flex-wrap: wrap;
+                                gap: 0.65rem;
+                                align-items: flex-start;
+                                justify-content: space-between;
+                        }
 
-			#register-map-status {
-				margin: 0;
-				font-size: 0.9rem;
-				color: #475569;
-			}
+                        #register-map-panel .panel-title {
+                                display: flex;
+                                flex-direction: column;
+                                gap: 0.35rem;
+                        }
 
-			#register-map-axis {
-				display: flex;
-				justify-content: space-between;
-				font-family: "Cascadia Code", Consolas, monospace;
-				font-size: 0.85rem;
-				color: #475569;
+                        #register-map-status {
+                                margin: 0;
+                                font-size: 0.9rem;
+                                color: #475569;
+                        }
+
+                        #register-map-toggle {
+                                border: 1px solid rgba(148, 163, 184, 0.7);
+                                background: rgba(255, 255, 255, 0.9);
+                                color: #1d4ed8;
+                                font-weight: 600;
+                                border-radius: 999px;
+                                padding: 0.3rem 0.9rem;
+                                cursor: pointer;
+                                font-size: 0.85rem;
+                                transition: background 120ms ease, color 120ms ease,
+                                        border-color 120ms ease;
+                        }
+
+                        #register-map-toggle:hover {
+                                background: rgba(59, 130, 246, 0.1);
+                                border-color: rgba(37, 99, 235, 0.5);
+                                color: #1d4ed8;
+                        }
+
+                        #register-map-toggle:disabled {
+                                cursor: not-allowed;
+                                opacity: 0.55;
+                                color: #64748b;
+                                background: rgba(226, 232, 240, 0.6);
+                                border-color: rgba(148, 163, 184, 0.5);
+                        }
+
+                        #register-map-toggle:focus-visible {
+                                outline: 2px solid rgba(37, 99, 235, 0.6);
+                                outline-offset: 2px;
+                        }
+
+                        #register-map-content {
+                                display: flex;
+                                flex-direction: column;
+                                gap: 0.75rem;
+                        }
+
+                        #register-map-panel.collapsed #register-map-content {
+                                display: none;
+                        }
+
+                        #register-map-axis {
+                                display: flex;
+                                justify-content: space-between;
+                                font-family: "Cascadia Code", Consolas, monospace;
+                                font-size: 0.85rem;
+                                color: #475569;
 			}
 
 			#register-map-track {
@@ -577,15 +625,32 @@
 				</div>
 			</aside>
 		</main>
-		<section id="register-map-panel" aria-live="polite" aria-atomic="true">
-			<div class="panel-header">
-				<h2>Register map</h2>
-				<p id="register-map-status"></p>
-			</div>
-			<div id="register-map-axis" class="hidden"></div>
-			<div id="register-map-track" class="hidden"></div>
-			<div id="register-map-legend" class="hidden"></div>
-		</section>
+                <section
+                        id="register-map-panel"
+                        class="collapsed"
+                        aria-live="polite"
+                        aria-atomic="true"
+                >
+                        <div class="panel-header">
+                                <div class="panel-title">
+                                        <h2>Register map</h2>
+                                        <p id="register-map-status"></p>
+                                </div>
+                                <button
+                                        id="register-map-toggle"
+                                        type="button"
+                                        aria-expanded="false"
+                                        aria-controls="register-map-content"
+                                >
+                                        Show register map
+                                </button>
+                        </div>
+                        <div id="register-map-content">
+                                <div id="register-map-axis" class="hidden"></div>
+                                <div id="register-map-track" class="hidden"></div>
+                                <div id="register-map-legend" class="hidden"></div>
+                        </div>
+                </section>
 		<script type="module" src="app.ts"></script>
 	</body>
 </html>
