@@ -296,7 +296,8 @@
 			}
 
                         #register-map-panel {
-                                margin-top: 1.25rem;
+                                flex: 0 1 320px;
+                                min-width: min(320px, 100%);
                                 border: 1px solid rgba(128, 128, 128, 0.35);
                                 border-radius: 8px;
                                 padding: 1rem 1.25rem;
@@ -304,6 +305,8 @@
                                 display: flex;
                                 flex-direction: column;
                                 gap: 0.75rem;
+                                align-self: stretch;
+                                min-height: 0;
                         }
 
                         #register-map-panel h2 {
@@ -367,6 +370,9 @@
                                 display: flex;
                                 flex-direction: column;
                                 gap: 0.75rem;
+                                flex: 1 1 auto;
+                                min-height: 0;
+                                overflow-y: auto;
                         }
 
                         #register-map-panel.collapsed #register-map-content {
@@ -504,16 +510,20 @@
 				outline: none;
 			}
 
-			@media (max-width: 900px) {
-				main#workspace {
-					flex-direction: column;
-				}
+                        @media (max-width: 900px) {
+                                main#workspace {
+                                        flex-direction: column;
+                                }
 
-				#viewer-wrapper,
-				#details-panel {
-					min-width: 100%;
-				}
-			}
+                                #viewer-wrapper,
+                                #details-panel {
+                                        min-width: 100%;
+                                }
+
+                                #register-map-panel {
+                                        flex: 1 1 auto;
+                                }
+                        }
 
 			#drop-overlay {
 				position: fixed;
@@ -611,46 +621,46 @@
 				aria-atomic="true"
 			></pre>
 		</section>
-		<main id="workspace">
-			<div id="viewer-wrapper">
-				<canvas id="viewer-canvas"></canvas>
-			</div>
-			<aside id="details-panel" aria-live="polite" aria-atomic="true">
-				<h2 id="details-title">Node details</h2>
-				<div id="details-content">
-					<p>
-						Click any node in the tree to inspect its attributes and
-						properties.
-					</p>
-				</div>
-			</aside>
-		</main>
-                <section
-                        id="register-map-panel"
-                        class="collapsed"
-                        aria-live="polite"
-                        aria-atomic="true"
-                >
-                        <div class="panel-header">
-                                <div class="panel-title">
-                                        <h2>Register map</h2>
-                                        <p id="register-map-status"></p>
+                <main id="workspace">
+                        <aside
+                                id="register-map-panel"
+                                class="collapsed"
+                                aria-live="polite"
+                                aria-atomic="true"
+                        >
+                                <div class="panel-header">
+                                        <div class="panel-title">
+                                                <h2>Register map</h2>
+                                                <p id="register-map-status"></p>
+                                        </div>
+                                        <button
+                                                id="register-map-toggle"
+                                                type="button"
+                                                aria-expanded="false"
+                                                aria-controls="register-map-content"
+                                        >
+                                                Show register map
+                                        </button>
                                 </div>
-                                <button
-                                        id="register-map-toggle"
-                                        type="button"
-                                        aria-expanded="false"
-                                        aria-controls="register-map-content"
-                                >
-                                        Show register map
-                                </button>
+                                <div id="register-map-content">
+                                        <div id="register-map-axis" class="hidden"></div>
+                                        <div id="register-map-track" class="hidden"></div>
+                                        <div id="register-map-legend" class="hidden"></div>
+                                </div>
+                        </aside>
+                        <div id="viewer-wrapper">
+                                <canvas id="viewer-canvas"></canvas>
                         </div>
-                        <div id="register-map-content">
-                                <div id="register-map-axis" class="hidden"></div>
-                                <div id="register-map-track" class="hidden"></div>
-                                <div id="register-map-legend" class="hidden"></div>
-                        </div>
-                </section>
+                        <aside id="details-panel" aria-live="polite" aria-atomic="true">
+                                <h2 id="details-title">Node details</h2>
+                                <div id="details-content">
+                                        <p>
+                                                Click any node in the tree to inspect its attributes and
+                                                properties.
+                                        </p>
+                                </div>
+                        </aside>
+                </main>
 		<script type="module" src="app.ts"></script>
 	</body>
 </html>
