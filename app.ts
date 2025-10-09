@@ -1162,12 +1162,21 @@ const computeCanvasMetrics = (layout: LayoutResult, scale = viewScale) => {
 	};
 };
 
-const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
-	if (!canvas || !ctx) {
-		return;
-	}
+const requestFrame: (callback: FrameRequestCallback) => number =
+        typeof requestAnimationFrame === "function"
+                ? requestAnimationFrame
+                : (callback) => setTimeout(() => callback(Date.now()), 16);
 
-	const metrics = computeCanvasMetrics(layout);
+let scheduledLayout: LayoutResult | null = null;
+let scheduledSelection: string | null = null;
+let renderHandle: number | null = null;
+
+const drawLayout = (layout: LayoutResult, selectedPath: string | null) => {
+        if (!canvas || !ctx) {
+                return;
+        }
+
+        const metrics = computeCanvasMetrics(layout);
 
 	prepareCanvas(metrics.width, metrics.height);
 
@@ -1263,11 +1272,11 @@ const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
 	ctx.textBaseline = "middle";
 	ctx.textAlign = "left";
 
-	layout.nodes.forEach((node) => {
-		const left = node.x;
-		const top = node.y - NODE_HEIGHT / 2;
-		const isSelected = selectedPath === node.node.path;
-		const isEndpoint = endpointPaths.has(node.node.path);
+        layout.nodes.forEach((node) => {
+                const left = node.x;
+                const top = node.y - NODE_HEIGHT / 2;
+                const isSelected = selectedPath === node.node.path;
+                const isEndpoint = endpointPaths.has(node.node.path);
 		const isPortal = node.portal;
 
 		if (isSelected) {
@@ -1337,7 +1346,26 @@ const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
 	});
 
 	ctx.restore();
-	ctx.restore();
+        ctx.restore();
+};
+
+const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
+        scheduledLayout = layout;
+        scheduledSelection = selectedPath;
+        if (renderHandle !== null) {
+                return;
+        }
+        renderHandle = requestFrame(() => {
+                renderHandle = null;
+                const layoutToRender = scheduledLayout;
+                const selectionToRender = scheduledSelection;
+                scheduledLayout = null;
+                scheduledSelection = null;
+                if (!layoutToRender) {
+                        return;
+                }
+                drawLayout(layoutToRender, selectionToRender ?? null);
+        });
 };
 
 const displayTree = (source: string, origin: string) => {
