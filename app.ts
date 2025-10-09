@@ -1627,53 +1627,66 @@ const filterDtsTree = (
 	};
 };
 
-const buildFilteredLayout = (
-	root: DtsNode | null,
-	normalized: string,
-	statusFilter: StatusFilter,
-	forced: Set<string>,
-	anchors: Map<string, string | null>,
-): LayoutResult | null => {
-	if (!root) {
-		return null;
-	}
-	if (!normalized && statusFilter === "all") {
-		return null;
-	}
+type FilteredView = {
+        root: DtsNode;
+        layout: LayoutResult;
+};
 
-	const filteredRoot = filterDtsTree(root, normalized, statusFilter, forced);
-	if (!filteredRoot) {
-		return null;
-	}
+const buildFilteredView = (
+        root: DtsNode | null,
+        normalized: string,
+        statusFilter: StatusFilter,
+        forced: Set<string>,
+        anchors: Map<string, string | null>,
+): FilteredView | null => {
+        if (!root) {
+                return null;
+        }
+        if (!normalized && statusFilter === "all") {
+                return null;
+        }
 
-	const layout = buildLayout(filteredRoot);
-	anchorForcedNodesNearSource(layout, anchors);
-	return layout;
+        const filteredRoot = filterDtsTree(root, normalized, statusFilter, forced);
+        if (!filteredRoot) {
+                return null;
+        }
+
+        const layout = buildLayout(filteredRoot);
+        anchorForcedNodesNearSource(layout, anchors);
+        return { root: filteredRoot, layout };
 };
 
 const applyFilters = () => {
-	const normalized = activeFilterNormalized;
-	const statusFilter = activeStatusFilter;
-	const hasActiveFilters = Boolean(normalized) || statusFilter !== "all";
-	if (!hasActiveFilters) {
-		forcedVisiblePaths.clear();
-		forcedVisibilityAnchors.clear();
-	} else {
-		pruneForcedVisibilityAnchors();
-	}
-	filteredLayout = buildFilteredLayout(
-		currentRoot,
-		normalized,
-		statusFilter,
-		forcedVisiblePaths,
-		forcedVisibilityAnchors,
-	);
-	filteredNodes = filteredLayout?.nodes ?? [];
+        const normalized = activeFilterNormalized;
+        const statusFilter = activeStatusFilter;
+        const hasActiveFilters = Boolean(normalized) || statusFilter !== "all";
+        if (!hasActiveFilters) {
+                forcedVisiblePaths.clear();
+                forcedVisibilityAnchors.clear();
+        } else {
+                pruneForcedVisibilityAnchors();
+        }
+        const filteredView = buildFilteredView(
+                currentRoot,
+                normalized,
+                statusFilter,
+                forcedVisiblePaths,
+                forcedVisibilityAnchors,
+        );
+        filteredLayout = filteredView?.layout ?? null;
+        filteredNodes = filteredLayout?.nodes ?? [];
 
-	if (hasActiveFilters) {
-		const currentNodes = filteredNodes;
-		const existingSelection =
-			selectedNodePath &&
+        const registerMapRoot = filteredView
+                ? filteredView.root
+                : hasActiveFilters
+                ? null
+                : currentRoot;
+        registerMap.updateRanges(registerMapRoot);
+
+        if (hasActiveFilters) {
+                const currentNodes = filteredNodes;
+                const existingSelection =
+                        selectedNodePath &&
 			currentNodes.find((node) => node.node.path === selectedNodePath);
 
 		if (!existingSelection) {
