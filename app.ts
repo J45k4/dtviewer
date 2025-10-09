@@ -1,5 +1,6 @@
 import { dtsPare } from "./dts";
 import type { DtsNode, DtsProperty, DtsValue } from "./dts";
+import { createRegisterMap, type RegisterMapController } from "./register-map";
 import {
 	CANVAS_PADDING,
 	NODE_GAP,
@@ -36,6 +37,21 @@ const warningsToggleLabel = document.querySelector<HTMLLabelElement>(
 	"#warnings-toggle-label",
 );
 const warningsPanel = document.querySelector<HTMLPreElement>("#warnings-panel");
+const registerMapPanel = document.querySelector<HTMLElement>("#register-map-panel");
+const registerMapToggle = document.querySelector<HTMLButtonElement>(
+        "#register-map-toggle",
+);
+const registerMapStatus = document.querySelector<HTMLParagraphElement>(
+        "#register-map-status",
+);
+const registerMapTrack = document.querySelector<HTMLDivElement>(
+        "#register-map-track",
+);
+const registerMapLegend = document.querySelector<HTMLDivElement>(
+        "#register-map-legend",
+);
+const registerMapAxis =
+        document.querySelector<HTMLDivElement>("#register-map-axis");
 
 const ctx = canvas?.getContext("2d");
 
@@ -437,18 +453,18 @@ type PropertyReference = {
 };
 
 const collectPropertyReferences = (
-        property: DtsProperty,
+	property: DtsProperty,
 ): PropertyReference[] => {
-        const references: PropertyReference[] = [];
-        const seen = new Set<string>();
-        const nameLower = property.name.toLowerCase();
-        const raw = property.raw ?? "";
-        const containsExplicitLabel = /&[A-Za-z_][\w.-]*/.test(raw);
-        const allowNumeric =
-                HANDLE_PROPERTY_NAMES.has(nameLower) ||
-                containsExplicitLabel ||
-                property.type === "number" ||
-                property.type === "mixed";
+	const references: PropertyReference[] = [];
+	const seen = new Set<string>();
+	const nameLower = property.name.toLowerCase();
+	const raw = property.raw ?? "";
+	const containsExplicitLabel = /&[A-Za-z_][\w.-]*/.test(raw);
+	const allowNumeric =
+		HANDLE_PROPERTY_NAMES.has(nameLower) ||
+		containsExplicitLabel ||
+		property.type === "number" ||
+		property.type === "mixed";
 
 	const addReference = (
 		target: DtsNode,
@@ -897,10 +913,23 @@ type PropertyLink = PropertyReference;
 const resolvePropertyLinks = (property: DtsProperty): PropertyLink[] =>
 	collectPropertyReferences(property);
 
+const registerMap: RegisterMapController = createRegisterMap({
+        panel: registerMapPanel,
+        toggle: registerMapToggle,
+        status: registerMapStatus,
+        track: registerMapTrack,
+        legend: registerMapLegend,
+        axis: registerMapAxis,
+        onFocusNode: focusNodeByPath,
+        collectNumbersFromValue,
+});
+
 const renderDetails = (node: DtsNode | null) => {
 	if (!detailsContent || !detailsTitle) {
 		return;
 	}
+
+        registerMap.setSelection(node?.path ?? null);
 
 	detailsContent.innerHTML = "";
 
@@ -1133,12 +1162,21 @@ const computeCanvasMetrics = (layout: LayoutResult, scale = viewScale) => {
 	};
 };
 
-const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
-	if (!canvas || !ctx) {
-		return;
-	}
+const requestFrame: (callback: FrameRequestCallback) => number =
+        typeof requestAnimationFrame === "function"
+                ? requestAnimationFrame
+                : (callback) => setTimeout(() => callback(Date.now()), 16);
 
-	const metrics = computeCanvasMetrics(layout);
+let scheduledLayout: LayoutResult | null = null;
+let scheduledSelection: string | null = null;
+let renderHandle: number | null = null;
+
+const drawLayout = (layout: LayoutResult, selectedPath: string | null) => {
+        if (!canvas || !ctx) {
+                return;
+        }
+
+        const metrics = computeCanvasMetrics(layout);
 
 	prepareCanvas(metrics.width, metrics.height);
 
@@ -1234,11 +1272,11 @@ const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
 	ctx.textBaseline = "middle";
 	ctx.textAlign = "left";
 
-	layout.nodes.forEach((node) => {
-		const left = node.x;
-		const top = node.y - NODE_HEIGHT / 2;
-		const isSelected = selectedPath === node.node.path;
-		const isEndpoint = endpointPaths.has(node.node.path);
+        layout.nodes.forEach((node) => {
+                const left = node.x;
+                const top = node.y - NODE_HEIGHT / 2;
+                const isSelected = selectedPath === node.node.path;
+                const isEndpoint = endpointPaths.has(node.node.path);
 		const isPortal = node.portal;
 
 		if (isSelected) {
@@ -1308,7 +1346,26 @@ const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
 	});
 
 	ctx.restore();
-	ctx.restore();
+        ctx.restore();
+};
+
+const renderLayout = (layout: LayoutResult, selectedPath: string | null) => {
+        scheduledLayout = layout;
+        scheduledSelection = selectedPath;
+        if (renderHandle !== null) {
+                return;
+        }
+        renderHandle = requestFrame(() => {
+                renderHandle = null;
+                const layoutToRender = scheduledLayout;
+                const selectionToRender = scheduledSelection;
+                scheduledLayout = null;
+                scheduledSelection = null;
+                if (!layoutToRender) {
+                        return;
+                }
+                drawLayout(layoutToRender, selectionToRender ?? null);
+        });
 };
 
 const displayTree = (source: string, origin: string) => {
@@ -1328,6 +1385,7 @@ const displayTree = (source: string, origin: string) => {
 		selectedNodePath = null;
 		selectedNode = null;
 		rebuildNodeIndexes(null);
+                registerMap.updateRanges(null);
 		renderDetails(null);
 		return;
 	}
@@ -1339,6 +1397,7 @@ const displayTree = (source: string, origin: string) => {
 	activeFilterRaw = "";
 	activeFilterNormalized = "";
 	rebuildNodeIndexes(currentRoot);
+        registerMap.updateRanges(currentRoot);
 	renderDetails(null);
 	if (canvas) {
 		canvas.style.cursor = "default";
@@ -1568,53 +1627,66 @@ const filterDtsTree = (
 	};
 };
 
-const buildFilteredLayout = (
-	root: DtsNode | null,
-	normalized: string,
-	statusFilter: StatusFilter,
-	forced: Set<string>,
-	anchors: Map<string, string | null>,
-): LayoutResult | null => {
-	if (!root) {
-		return null;
-	}
-	if (!normalized && statusFilter === "all") {
-		return null;
-	}
+type FilteredView = {
+        root: DtsNode;
+        layout: LayoutResult;
+};
 
-	const filteredRoot = filterDtsTree(root, normalized, statusFilter, forced);
-	if (!filteredRoot) {
-		return null;
-	}
+const buildFilteredView = (
+        root: DtsNode | null,
+        normalized: string,
+        statusFilter: StatusFilter,
+        forced: Set<string>,
+        anchors: Map<string, string | null>,
+): FilteredView | null => {
+        if (!root) {
+                return null;
+        }
+        if (!normalized && statusFilter === "all") {
+                return null;
+        }
 
-	const layout = buildLayout(filteredRoot);
-	anchorForcedNodesNearSource(layout, anchors);
-	return layout;
+        const filteredRoot = filterDtsTree(root, normalized, statusFilter, forced);
+        if (!filteredRoot) {
+                return null;
+        }
+
+        const layout = buildLayout(filteredRoot);
+        anchorForcedNodesNearSource(layout, anchors);
+        return { root: filteredRoot, layout };
 };
 
 const applyFilters = () => {
-	const normalized = activeFilterNormalized;
-	const statusFilter = activeStatusFilter;
-	const hasActiveFilters = Boolean(normalized) || statusFilter !== "all";
-	if (!hasActiveFilters) {
-		forcedVisiblePaths.clear();
-		forcedVisibilityAnchors.clear();
-	} else {
-		pruneForcedVisibilityAnchors();
-	}
-	filteredLayout = buildFilteredLayout(
-		currentRoot,
-		normalized,
-		statusFilter,
-		forcedVisiblePaths,
-		forcedVisibilityAnchors,
-	);
-	filteredNodes = filteredLayout?.nodes ?? [];
+        const normalized = activeFilterNormalized;
+        const statusFilter = activeStatusFilter;
+        const hasActiveFilters = Boolean(normalized) || statusFilter !== "all";
+        if (!hasActiveFilters) {
+                forcedVisiblePaths.clear();
+                forcedVisibilityAnchors.clear();
+        } else {
+                pruneForcedVisibilityAnchors();
+        }
+        const filteredView = buildFilteredView(
+                currentRoot,
+                normalized,
+                statusFilter,
+                forcedVisiblePaths,
+                forcedVisibilityAnchors,
+        );
+        filteredLayout = filteredView?.layout ?? null;
+        filteredNodes = filteredLayout?.nodes ?? [];
 
-	if (hasActiveFilters) {
-		const currentNodes = filteredNodes;
-		const existingSelection =
-			selectedNodePath &&
+        const registerMapRoot = filteredView
+                ? filteredView.root
+                : hasActiveFilters
+                ? null
+                : currentRoot;
+        registerMap.updateRanges(registerMapRoot);
+
+        if (hasActiveFilters) {
+                const currentNodes = filteredNodes;
+                const existingSelection =
+                        selectedNodePath &&
 			currentNodes.find((node) => node.node.path === selectedNodePath);
 
 		if (!existingSelection) {
@@ -1724,11 +1796,11 @@ const handleFileSelection = async (file: File) => {
 };
 
 const attachEventHandlers = () => {
-	if (fileInput) {
-		fileInput.addEventListener("change", async () => {
-			const file = fileInput.files?.[0];
-			if (!file) {
-				return;
+        if (fileInput) {
+                fileInput.addEventListener("change", async () => {
+                        const file = fileInput.files?.[0];
+                        if (!file) {
+                                return;
 			}
 
 			try {
@@ -1746,15 +1818,15 @@ const attachEventHandlers = () => {
 		});
 	}
 
-	sampleButton?.addEventListener("click", () => {
-		displayTree(SAMPLE_DTS, "Sample DTS");
-	});
+        sampleButton?.addEventListener("click", () => {
+                displayTree(SAMPLE_DTS, "Sample DTS");
+        });
 
-	warningsToggle?.addEventListener("change", () => {
-		renderWarningsPanel();
-		if (lastStatus) {
-			updateStatus(
-				lastStatus.origin,
+        warningsToggle?.addEventListener("change", () => {
+                renderWarningsPanel();
+                if (lastStatus) {
+                        updateStatus(
+                                lastStatus.origin,
 				lastStatus.nodeCount,
 				lastStatus.errors,
 				lastStatus.warnings,
@@ -2038,11 +2110,13 @@ const attachEventHandlers = () => {
 	});
 };
 
+registerMap.setExpanded(false);
+
 if (!ctx) {
-	statusElement?.classList.add("error");
-	statusElement?.append(
-		"\nCanvas rendering context unavailable in this browser.",
-	);
+        statusElement?.classList.add("error");
+        statusElement?.append(
+                "\nCanvas rendering context unavailable in this browser.",
+        );
 } else {
-	attachEventHandlers();
+        attachEventHandlers();
 }

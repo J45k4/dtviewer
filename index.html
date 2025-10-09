@@ -295,16 +295,235 @@
 				border-bottom: none;
 			}
 
-			@media (max-width: 900px) {
-				main#workspace {
-					flex-direction: column;
-				}
+                        #register-map-panel {
+                                flex: 0 1 320px;
+                                min-width: min(320px, 100%);
+                                border: 1px solid rgba(128, 128, 128, 0.35);
+                                border-radius: 8px;
+                                padding: 1rem 1.25rem;
+                                background: rgba(248, 250, 252, 0.75);
+                                display: flex;
+                                flex-direction: column;
+                                gap: 0.75rem;
+                                align-self: stretch;
+                                min-height: 0;
+                        }
 
-				#viewer-wrapper,
-				#details-panel {
-					min-width: 100%;
-				}
+                        #register-map-panel h2 {
+                                margin: 0;
+                                font-size: 1.05rem;
+                        }
+
+                        #register-map-panel .panel-header {
+                                display: flex;
+                                flex-wrap: wrap;
+                                gap: 0.65rem;
+                                align-items: flex-start;
+                                justify-content: space-between;
+                        }
+
+                        #register-map-panel .panel-title {
+                                display: flex;
+                                flex-direction: column;
+                                gap: 0.35rem;
+                        }
+
+                        #register-map-status {
+                                margin: 0;
+                                font-size: 0.9rem;
+                                color: #475569;
+                        }
+
+                        #register-map-toggle {
+                                border: 1px solid rgba(148, 163, 184, 0.7);
+                                background: rgba(255, 255, 255, 0.9);
+                                color: #1d4ed8;
+                                font-weight: 600;
+                                border-radius: 999px;
+                                padding: 0.3rem 0.9rem;
+                                cursor: pointer;
+                                font-size: 0.85rem;
+                                transition: background 120ms ease, color 120ms ease,
+                                        border-color 120ms ease;
+                        }
+
+                        #register-map-toggle:hover {
+                                background: rgba(59, 130, 246, 0.1);
+                                border-color: rgba(37, 99, 235, 0.5);
+                                color: #1d4ed8;
+                        }
+
+                        #register-map-toggle:disabled {
+                                cursor: not-allowed;
+                                opacity: 0.55;
+                                color: #64748b;
+                                background: rgba(226, 232, 240, 0.6);
+                                border-color: rgba(148, 163, 184, 0.5);
+                        }
+
+                        #register-map-toggle:focus-visible {
+                                outline: 2px solid rgba(37, 99, 235, 0.6);
+                                outline-offset: 2px;
+                        }
+
+                        #register-map-content {
+                                display: flex;
+                                flex-direction: column;
+                                gap: 0.75rem;
+                                flex: 1 1 auto;
+                                min-height: 0;
+                                overflow-y: auto;
+                        }
+
+                        #register-map-panel.collapsed #register-map-content {
+                                display: none;
+                        }
+
+                        #register-map-axis {
+                                display: flex;
+                                justify-content: space-between;
+                                font-family: "Cascadia Code", Consolas, monospace;
+                                font-size: 0.85rem;
+                                color: #475569;
 			}
+
+			#register-map-track {
+				display: flex;
+				align-items: stretch;
+				width: 100%;
+				height: 54px;
+				border-radius: 10px;
+				overflow: hidden;
+				border: 1px solid rgba(148, 163, 184, 0.45);
+				background: rgba(226, 232, 240, 0.5);
+			}
+
+			#register-map-track.hidden {
+				display: none;
+			}
+
+			#register-map-axis.hidden {
+				display: none;
+			}
+
+			#register-map-legend.hidden {
+				display: none;
+			}
+
+			.register-gap {
+				flex: 0 0 auto;
+				background: repeating-linear-gradient(
+					135deg,
+					rgba(148, 163, 184, 0.25),
+					rgba(148, 163, 184, 0.25) 8px,
+					rgba(203, 213, 225, 0.25) 8px,
+					rgba(203, 213, 225, 0.25) 16px
+				);
+			}
+
+			.register-segment {
+				flex: 0 0 auto;
+				border: none;
+				border-right: 1px solid rgba(15, 23, 42, 0.08);
+				background: rgba(59, 130, 246, 0.6);
+				cursor: pointer;
+				position: relative;
+				padding: 0;
+				transition:
+					transform 120ms ease,
+					box-shadow 120ms ease;
+				min-width: 4px;
+			}
+
+			.register-segment:last-child {
+				border-right: none;
+			}
+
+			.register-segment::after {
+				content: "";
+				position: absolute;
+				inset: 0;
+				background: linear-gradient(
+					to bottom,
+					rgba(255, 255, 255, 0.18),
+					rgba(255, 255, 255, 0.05)
+				);
+				pointer-events: none;
+			}
+
+			.register-segment:hover,
+			.register-segment:focus-visible {
+				transform: translateY(-1px);
+				box-shadow: 0 4px 10px rgba(15, 23, 42, 0.25);
+				outline: none;
+			}
+
+			.register-segment.selected {
+				outline: 2px solid rgba(29, 78, 216, 0.9);
+				outline-offset: -2px;
+				z-index: 1;
+			}
+
+			#register-map-legend table {
+				width: 100%;
+				border-collapse: collapse;
+				font-size: 0.9rem;
+			}
+
+			#register-map-legend th,
+			#register-map-legend td {
+				text-align: left;
+				padding: 0.35rem 0.4rem;
+				border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+				vertical-align: middle;
+			}
+
+			#register-map-legend tbody tr:last-child td {
+				border-bottom: none;
+			}
+
+			#register-map-legend tbody tr.selected {
+				background: rgba(59, 130, 246, 0.12);
+			}
+
+			.register-swatch {
+				display: inline-block;
+				width: 0.85rem;
+				height: 0.85rem;
+				border-radius: 3px;
+				box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.1);
+			}
+
+			.register-link {
+				background: none;
+				border: none;
+				padding: 0;
+				color: #1d4ed8;
+				cursor: pointer;
+				font: inherit;
+				text-align: left;
+			}
+
+			.register-link:hover,
+			.register-link:focus-visible {
+				text-decoration: underline;
+				outline: none;
+			}
+
+                        @media (max-width: 900px) {
+                                main#workspace {
+                                        flex-direction: column;
+                                }
+
+                                #viewer-wrapper,
+                                #details-panel {
+                                        min-width: 100%;
+                                }
+
+                                #register-map-panel {
+                                        flex: 1 1 auto;
+                                }
+                        }
 
 			#drop-overlay {
 				position: fixed;
@@ -402,20 +621,46 @@
 				aria-atomic="true"
 			></pre>
 		</section>
-		<main id="workspace">
-			<div id="viewer-wrapper">
-				<canvas id="viewer-canvas"></canvas>
-			</div>
-			<aside id="details-panel" aria-live="polite" aria-atomic="true">
-				<h2 id="details-title">Node details</h2>
-				<div id="details-content">
-					<p>
-						Click any node in the tree to inspect its attributes and
-						properties.
-					</p>
-				</div>
-			</aside>
-		</main>
+                <main id="workspace">
+                        <aside
+                                id="register-map-panel"
+                                class="collapsed"
+                                aria-live="polite"
+                                aria-atomic="true"
+                        >
+                                <div class="panel-header">
+                                        <div class="panel-title">
+                                                <h2>Register map</h2>
+                                                <p id="register-map-status"></p>
+                                        </div>
+                                        <button
+                                                id="register-map-toggle"
+                                                type="button"
+                                                aria-expanded="false"
+                                                aria-controls="register-map-content"
+                                        >
+                                                Show register map
+                                        </button>
+                                </div>
+                                <div id="register-map-content">
+                                        <div id="register-map-axis" class="hidden"></div>
+                                        <div id="register-map-track" class="hidden"></div>
+                                        <div id="register-map-legend" class="hidden"></div>
+                                </div>
+                        </aside>
+                        <div id="viewer-wrapper">
+                                <canvas id="viewer-canvas"></canvas>
+                        </div>
+                        <aside id="details-panel" aria-live="polite" aria-atomic="true">
+                                <h2 id="details-title">Node details</h2>
+                                <div id="details-content">
+                                        <p>
+                                                Click any node in the tree to inspect its attributes and
+                                                properties.
+                                        </p>
+                                </div>
+                        </aside>
+                </main>
 		<script type="module" src="app.ts"></script>
 	</body>
 </html>
